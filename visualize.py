@@ -7,6 +7,7 @@ from dataset.data import create_cityscapes_colormap, create_pascal_label_colorma
 from utils.seg_utils import unnorm
 from PIL import Image
 from utils.seg_utils import UnsupervisedMetrics
+import matplotlib.pyplot as plt 
 
 
 def prep_for_plot(img, rescale=True, resize=None):
@@ -26,6 +27,8 @@ def visualization(save_dir: str, dataset_type: str, saved_data: defaultdict, clu
         os.makedirs(join(save_dir, "label"), exist_ok=True)
     os.makedirs(join(save_dir, "cluster"), exist_ok=True)
     os.makedirs(join(save_dir, "linear"), exist_ok=True)
+    os.makedirs(join(save_dir, "rgb"), exist_ok=True)
+    os.makedirs(join(save_dir, "cam"), exist_ok=True)
 
     if dataset_type.startswith("cityscapes"):
         label_cmap = create_cityscapes_colormap()
@@ -43,6 +46,15 @@ def visualization(save_dir: str, dataset_type: str, saved_data: defaultdict, clu
 
         plot_linear = (label_cmap[saved_data["linear_preds"][index]]).astype(np.uint8)
         Image.fromarray(plot_linear).save(join(join(save_dir, "linear", file_name + ".png")))
+
+        img = saved_data['img'][index].cpu().numpy()
+        Image.fromarray(img).save(join(join(save_dir, "rgb", file_name + ".png")))
+
+        plot_cam = saved_data['cam_preds'][index].cpu().numpy()
+        plt.imshow(plot_cam, cmap = 'jet')
+        #cbar = plt.colorbar(ticks=[0, 1]) 
+ 
+        plt.savefig(join(join(save_dir, "cam", file_name + ".png")))
 
 def visualization_label(save_dir: str, saved_data: defaultdict):
     label_cmap = create_pascal_label_colormap()

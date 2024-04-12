@@ -1,0 +1,10 @@
+pytorch
+pytorch_lightning=1.7.7
+matplotlib
+tqdm
+scipy
+hydra-core
+seaborn
+pydensecrf
+torchmetrics=0.11.4
+pip install git+https://github.com/lucasb-eyer/pydensecrf.git

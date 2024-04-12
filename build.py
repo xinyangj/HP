@@ -11,6 +11,9 @@ from torchvision import transforms as T
 from loss import *
 
 
+
+
+
 def build_model(opt: dict, n_classes: int = 27, is_direct: bool = False):
     model_type = opt["name"].lower()
 
@@ -22,6 +25,7 @@ def build_model(opt: dict, n_classes: int = 27, is_direct: bool = False):
         net_model = model.net
         linear_model = model.linear_probe
         cluster_model = model.cluster_probe
+        cam_model = model.cam
 
     elif model_type == "dino":
         model = nn.Sequential(
@@ -45,7 +49,7 @@ def build_model(opt: dict, n_classes: int = 27, is_direct: bool = False):
                 module.eps = bn_eps
 
     if "stego" in model_type:
-        return net_model, linear_model, cluster_model
+        return net_model, linear_model, cluster_model, cam_model
     elif model_type == "dino":
         return model
 
@@ -94,7 +98,7 @@ def split_params_for_optimizer(model, opt):
     return params_for_optimizer
 
 
-def build_optimizer(main_params, linear_params, cluster_params, opt: dict, model_type: str):
+def build_optimizer(main_params, linear_params, cluster_params, cam_params, opt: dict, model_type: str):
     # opt = opt["optimizer"]
     model_type = model_type.lower()
 
@@ -118,9 +122,14 @@ def build_optimizer(main_params, linear_params, cluster_params, opt: dict, model
             cluster_probe_optimizer = Adam(cluster_params, lr=opt["cluster"]["lr"])
         else:
             raise ValueError(f"Unsupported optimizer type {cluster_probe_optimizer_type}.")
+        
+        cam_optimizer_type = opt["cam"]["name"].lower()
+        if cam_optimizer_type == "adam":
+            cam_optimizer = Adam(cam_params, lr=opt["cam"]["lr"])
+        else:
+            raise ValueError(f"Unsupported optimizer type {linear_probe_optimizer_type}.")
 
-
-        return net_optimizer, linear_probe_optimizer, cluster_probe_optimizer
+        return net_optimizer, linear_probe_optimizer, cluster_probe_optimizer, cam_optimizer
 
     else:
         raise ValueError("No model: {} found".format(model_type))

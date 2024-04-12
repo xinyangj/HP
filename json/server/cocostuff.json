@@ -3,16 +3,16 @@
     "output_dir": "./output/",
     "checkpoint": "",
     "wandb": {
-        "project": "Project_name",
-        "entity": "your_ID",
-        "name": "experiment_name",
+        "project": "xinyangj001",
+        "entity": "xinyangj",
+        "name": "hp_cam",
         "mode": "online"
     },
     "dataset": {
         "data_type": "cocostuff27",
-        "data_path": "/DATA/seg/cocostuff",
+        "data_path": "./datasets/cocostuff",
         "loader_crop_type" : "center",
-        "crop_type" : "five",
+        "crop_type" : null,
         "crop_ratio": 0.5,
         "res" : 224,
         "num_neighbors" : 7
@@ -39,7 +39,7 @@
         "arch" : "dino",
         "continuous" : true,
         "dim" : 512,
-        "extra_clusters" : 0,
+        "extra_clusters" : 130,
         "bn_momentum" : null,
         "bn_eps" : null,
         "pretrained": {
@@ -80,6 +80,10 @@
             "name" : "adam",
             "lr" : 1e-3
         },
+        "cam" : {
+            "name" : "adam",
+            "lr" : 1e-3
+        },
         "cluster" : {
             "name" : "adam",
             "lr" : 5e-3
@@ -88,7 +92,7 @@
     "scheduler": {
     },
     "train": {
-        "print_freq": 25,
+        "print_freq": 10,
         "valid_freq": 100,
         "epoch" : 3,
         "freeze_encoder_bn" : false,
@@ -98,7 +102,7 @@
 
     },
     "eval": {
-        "extra_clusters" : 0,
+        "extra_clusters" : 130,
         "n_images": 5,
         "is_crf" : true,
         "is_visualize" : false,

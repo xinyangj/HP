@@ -1,18 +1,18 @@
 {
-    "gpu_ids": [0],
+    "gpu_ids": [1],
     "output_dir": "./output/",
     "checkpoint": "",
     "wandb": {
-        "project": "Project_name",
-        "entity": "your_ID",
-        "name": "experiment_name",
+        "project": "xinyangj001",
+        "entity": "xinyangj",
+        "name": "hp_cam_vq",
         "mode": "online"
     },
     "dataset": {
-        "data_type": "potsdam",
-        "data_path": "./datasets/potsdam",
+        "data_type": "cocostuff27",
+        "data_path": "./datasets/cocostuff",
         "loader_crop_type" : "center",
-        "crop_type" : "five",
+        "crop_type" : null,
         "crop_ratio": 0.5,
         "res" : 224,
         "num_neighbors" : 7
@@ -22,29 +22,29 @@
         "num_workers": 8
     },
 
-    "tau": 0.4,
-    "alpha": 0.0,
-    "rho": 1.0,
+    "tau": 0.8,
+    "alpha": 0.05,
+    "rho": 0.02,
     "loss_version": 1,
     "reweighting": 1,
 
-    "renew_interval": 20,
+    "renew_interval": 100,
 
     "model": {
-        "pool_size": 1024,
-        "ema_m": 0.999,
-        "warmup": 100,
+        "pool_size": 2048,
+        "ema_m": 0.99,
+        "warmup": 1000,
         "spatial_size": 28,
         "name": "STEGO",
         "arch" : "dino",
         "continuous" : true,
-        "dim" : 256,
-        "extra_clusters" : 0,
+        "dim" : 512,
+        "extra_clusters" : 130,
         "bn_momentum" : null,
         "bn_eps" : null,
         "pretrained": {
             "name": "dino",
-            "model_type": "vit_base",
+            "model_type": "vit_small",
             "dino_patch_size": 8,
             "dino_feat_type" : "feat",
             "pretrained_weights" : null,
@@ -80,6 +80,10 @@
             "name" : "adam",
             "lr" : 1e-3
         },
+        "cam" : {
+            "name" : "adam",
+            "lr" : 1e-3
+        },
         "cluster" : {
             "name" : "adam",
             "lr" : 5e-3
@@ -88,9 +92,9 @@
     "scheduler": {
     },
     "train": {
-        "print_freq": 25,
-        "valid_freq": 50,
-        "epoch" : 10,
+        "print_freq": 10,
+        "valid_freq": 100,
+        "epoch" : 3,
         "freeze_encoder_bn" : false,
         "freeze_all_bn" : -1,
         "num_accum" : 1,
@@ -98,7 +102,7 @@
 
     },
     "eval": {
-        "extra_clusters" : 0,
+        "extra_clusters" : 130,
         "n_images": 5,
         "is_crf" : true,
         "is_visualize" : false,

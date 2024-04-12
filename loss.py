@@ -34,9 +34,10 @@ class StegoLoss(nn.Module):
         self.corr_weight = corr_weight
         self.corr_loss = ContrastiveCorrelationLoss(cfg)
         self.linear_loss = LinearLoss(cfg)
+        self.cam_loss = CamLoss()
 
     def forward(self, model_input, model_output, model_pos_output=None, linear_output: torch.Tensor() = None,
-                cluster_output: torch.Tensor() = None) \
+                cluster_output: torch.Tensor() = None, cam_output = None) \
             -> Tuple[torch.Tensor, Dict[str, float]]:
         img, label = model_input
         # feats, code = model_output
@@ -54,9 +55,10 @@ class StegoLoss(nn.Module):
 
         linear_loss = self.linear_loss(linear_output, label, self.n_classes)
         cluster_loss = cluster_output[0]
-        loss = linear_loss + cluster_loss
+        cam_loss = self.cam_loss(cam_output[1], label)
+        loss = linear_loss + cluster_loss + cam_loss
         loss_dict = {"loss": loss.item(), "corr": corr_loss.item(), "linear": linear_loss.item(),
-                     "cluster": cluster_loss.item()}
+                     "cluster": cluster_loss.item(), "cam": cam_loss.item()}
 
         return loss, loss_dict, corr_loss_dict
 
@@ -140,6 +142,32 @@ class ContrastiveCorrelationLoss(nn.Module):
                  "knn_loss": pos_inter_loss.mean().item(),
                  "rand_loss": neg_inter_loss.mean().item()}
                 )
+
+
+class CamLoss(nn.Module):
+    def __init__(self, target_class = 11):
+        super(CamLoss, self).__init__()
+        #self.loss = nn.CrossEntropyLoss()
+        self.loss = nn.BCEWithLogitsLoss()
+        self.target_class = target_class
+
+    def forward(self, logits, label):
+        #print(label[0])
+        binary_label = torch.zeros_like(label)
+        binary_label[label != self.target_class] = 0
+        binary_label[label == self.target_class] = 1
+        #print(torch.unique(binary_label))
+        
+        #binary_label = torch.max(torch.max(binary_label, -1)[0], -1)[0]
+        binary_label = (torch.sum(torch.sum(binary_label, -1), -1) > 100)
+        #print(binary_label.float())
+        #raise SystemExit
+        #print(binary_label, binary_label.size())
+        #raise SystemExit
+        #print(logits.size(), binary_label.size())
+        #print(binary_label)
+        return self.loss(logits, binary_label.float())
+
 
 
 class LinearLoss(nn.Module):

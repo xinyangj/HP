@@ -130,7 +130,7 @@ class DirectoryDataset(Dataset):
     def __getitem__(self, index):
         image_fn = self.img_files[index]
         img = Image.open(join(self.img_dir, image_fn))
-
+        
         if self.label_files is not None:
             label_fn = self.label_files[index]
             label = Image.open(join(self.label_dir, label_fn))

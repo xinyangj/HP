@@ -1,18 +1,18 @@
 {
-    "gpu_ids": [0],
+    "gpu_ids": [1],
     "output_dir": "./output/",
-    "checkpoint": "hp_saved",
+    "checkpoint": "hp_cam",
     "wandb": {
-        "project": "Project_name",
-        "entity": "your_ID",
-        "name": "experiment_name",
+        "project": "xinyangj001",
+        "entity": "xinyangj",
+        "name": "hp_cam_eval",
         "mode": "online"
     },
     "dataset": {
         "data_type": "cocostuff27",
-        "data_path": "/DATA/seg/cocostuff",
+        "data_path": "./datasets/cocostuff",
         "loader_crop_type" : "center",
-        "crop_type" : "five",
+        "crop_type" : null,
         "crop_ratio": 0.5,
         "res" : 224,
         "num_neighbors" : 7

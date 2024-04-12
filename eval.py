@@ -22,6 +22,10 @@ from torchvision import datasets, transforms
 import numpy as np
 from torch.optim import Adam, AdamW
 from loss import SupConLoss
+from visualize import visualization
+from collections import defaultdict 
+from torcheval.metrics import BinaryAUROC
+import numpy as np
 
 def run(opt: dict, is_test: bool = False, is_debug: bool = False):
     is_train = (not is_test)
@@ -75,7 +79,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
                                   batch_size=world_size*32)
 
     # -------------------------- Define -------------------------------#
-    net_model, linear_model, cluster_model = build_model(opt=opt["model"],
+    net_model, linear_model, cluster_model, cam_model = build_model(opt=opt["model"],
                                                          n_classes=val_dataset.n_classes,
                                                          is_direct=opt["eval"]["is_direct"])
 
@@ -83,6 +87,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
     net_model = net_model.to(device)
     linear_model = linear_model.to(device)
     cluster_model = cluster_model.to(device)
+    cam_model = cam_model.to(device)
 
     model = net_model
     model_m = model
@@ -97,8 +102,9 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
     net_model.load_state_dict(checkpoint_loaded['net_model_state_dict'], strict=True)
     linear_model.load_state_dict(checkpoint_loaded['linear_model_state_dict'], strict=True)
     cluster_model.load_state_dict(checkpoint_loaded['cluster_model_state_dict'], strict=True)
+    cam_model.load_state_dict(checkpoint_loaded['cam_model_state_dict'], strict=True)
 
-    loss_, metrics_ = evaluate(net_model, linear_model, cluster_model, val_loader, device=device,
+    loss_, metrics_ = evaluate(net_model, linear_model, cluster_model, cam_model, val_loader, device=device,
                                                                             opt=opt, n_classes=train_dataset.n_classes)
     s = time_log()
     s += f" ------------------- before crf ---------------------\n"
@@ -107,7 +113,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
     print_fn(s)
 
 
-    loss_, metrics_ = evaluate(net_model, linear_model, cluster_model,
+    loss_, metrics_ = evaluate(net_model, linear_model, cluster_model, cam_model, 
         val_loader, device=device, opt=opt, n_classes=train_dataset.n_classes, is_crf=opt["eval"]["is_crf"])
 
     s = time_log()
@@ -120,6 +126,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
 def evaluate(net_model: nn.Module,
              linear_model: nn.Module,
              cluster_model: nn.Module,
+             cam_model: nn.Module, 
              eval_loader: DataLoader,
              device: torch.device,
              opt: Dict,
@@ -134,6 +141,14 @@ def evaluate(net_model: nn.Module,
         "Cluster_", n_classes, opt["eval"]["extra_clusters"], True)
     linear_metrics = UnsupervisedMetrics(
         "Linear_", n_classes, 0, False)
+    cam_metrics = BinaryAUROC()
+
+    vis_data = {}
+    vis_count = 0
+    vis_num = 100
+
+    normalize_mean = np.array([0.485, 0.456, 0.406])
+    normalize_std = np.array([0.229, 0.224, 0.225])
 
     with torch.no_grad():
         eval_stats = RunningAverage()
@@ -147,8 +162,13 @@ def evaluate(net_model: nn.Module,
             feats = output[0]
             head_code = output[1]
 
+            with torch.cuda.amp.autocast(enabled=True):
+                heat_map, logits = cam_model(head_code, cluster_model.clusters)
+                #heat_map = F.sigmoid(heat_map)
+            
             head_code = F.interpolate(head_code, label.shape[-2:], mode='bilinear', align_corners=False)
-
+            heat_map = F.interpolate(heat_map, label.shape[-2:], mode='bilinear', align_corners=False)
+            
             if is_crf:
                 with torch.cuda.amp.autocast(enabled=True):
                     linear_preds = torch.log_softmax(linear_model(head_code), dim=1)
@@ -166,13 +186,54 @@ def evaluate(net_model: nn.Module,
                     cluster_loss, cluster_preds = cluster_model(head_code, None, is_direct=opt["eval"]["is_direct"])
                 cluster_preds = cluster_preds.argmax(1)
 
+
+
+
+            binary_label = torch.zeros_like(label)
+            binary_label[label != 11] = 0
+            binary_label[label == 11] = 1
+            binary_label = torch.max(torch.max(binary_label, -1)[0], -1)[0]
             linear_metrics.update(linear_preds, label)
             cluster_metrics.update(cluster_preds, label)
+            cam_metrics.update(F.softmax(logits), binary_label)
 
             eval_stats.append(cluster_loss)
 
-        eval_metrics = get_metrics(cluster_metrics, linear_metrics)
+            
+            
+            
+            if vis_count < vis_num:
+                print(binary_label)
+                #binary_label = 1 - binary_label
+                binary_label = binary_label.cpu()
+                vis_count += np.sum(binary_label.numpy().astype(np.int32))
 
+                vis_im = data['img'][binary_label == 1]
+                vis_im = (vis_im * normalize_std[None, :, None, None] + normalize_mean[None, :, None, None]) * 255
+                vis_im = torch.clip(vis_im, 0, 255).to(torch.uint8)
+                vis_im = torch.permute(vis_im, (0, 2, 3, 1))
+                #heat_map = heat_map[:, 1]
+                heat_map = heat_map.squeeze()
+                if 'img_path' not in vis_data:
+                    vis_data['img'] = vis_im
+                    vis_data['img_path'] = data['ind'][binary_label == 1]
+                    vis_data['label'] = label.cpu()[binary_label == 1]
+                    vis_data['linear_preds'] = linear_preds.cpu()[binary_label == 1]
+                    vis_data['cluster_preds'] = cluster_preds.cpu()[binary_label == 1]
+                    vis_data['cam_preds'] = heat_map.cpu()[binary_label == 1]
+                else:
+                    vis_data['img'] = torch.cat([vis_data['img'], vis_im], dim = 0)
+                    vis_data['img_path'] = torch.cat([vis_data['img_path'], data['ind'][binary_label == 1]], dim = 0)
+                    vis_data['label'] = torch.cat([vis_data['label'], label.cpu()[binary_label == 1]], dim = 0)
+                    vis_data['linear_preds'] = torch.cat([vis_data['linear_preds'], linear_preds.cpu()[binary_label == 1]], dim = 0)
+                    vis_data['cluster_preds'] = torch.cat([vis_data['linear_preds'], cluster_preds.cpu()[binary_label == 1]], dim = 0)
+                    vis_data['cam_preds'] = torch.cat([vis_data['cam_preds'], heat_map.cpu()[binary_label == 1]], dim = 0)
+            print(vis_data['img'].size())
+            #print(data.keys())
+            save_dir='vis_tune_code'
+
+        eval_metrics = get_metrics(cluster_metrics, linear_metrics,cam_metrics)
+        visualization(save_dir = save_dir,dataset_type = 'voc_stuff',saved_data = vis_data,cluster_metrics = cluster_metrics,is_label = True)
         return eval_stats.avg, eval_metrics
 
 

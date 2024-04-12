@@ -147,11 +147,14 @@ class UnsupervisedMetrics(Metric):
         return {k: 100 * v for k, v in metric_dict.items()}
 
 
-def get_metrics(m1: UnsupervisedMetrics, m2: UnsupervisedMetrics) -> Dict[str, Any]:
+def get_metrics(m1: UnsupervisedMetrics, m2: UnsupervisedMetrics, m3) -> Dict[str, Any]:
     metric_dict_1 = m1.compute()
     metric_dict_2 = m2.compute()
+    metric_dict_3 = {'CAM_AUC': m3.compute()}
     metrics = all_reduce_dict(metric_dict_1, op="mean")
     tmp = all_reduce_dict(metric_dict_2, op="mean")
+    metrics.update(tmp)
+    tmp = all_reduce_dict(metric_dict_3, op="mean")
     metrics.update(tmp)
 
     return metrics

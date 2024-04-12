@@ -23,6 +23,7 @@ import numpy as np
 from torch.optim import Adam, AdamW
 from loss import SupConLoss
 from make_reference_pool import initialize_reference_pool, renew_reference_pool
+from torcheval.metrics import BinaryAUROC
 
 def run(opt: dict, is_test: bool = False, is_debug: bool = False):
     is_train = (not is_test)
@@ -54,7 +55,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
                                   batch_size=16)
 
     # -------------------------- Define -------------------------------#
-    net_model, linear_model, cluster_model = build_model(opt=opt["model"],
+    net_model, linear_model, cluster_model, cam_model = build_model(opt=opt["model"],
                                                          n_classes=val_dataset.n_classes,
                                                          is_direct=opt["eval"]["is_direct"])
 
@@ -65,6 +66,8 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
     net_model = net_model.to(device)
     linear_model = linear_model.to(device)
     cluster_model = cluster_model.to(device)
+    cam_model = cam_model.to(device)
+    
 
     project_head = nn.Linear(opt['model']['dim'], opt['model']['dim'])
     project_head.cuda()
@@ -82,14 +85,15 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
 
     # ------------------- Optimizer  -----------------------#
     if is_train:
-        net_optimizer, linear_probe_optimizer, cluster_probe_optimizer = build_optimizer(
+        net_optimizer, linear_probe_optimizer, cluster_probe_optimizer, cam_optimizer = build_optimizer(
             main_params=model_m.parameters(),
             linear_params=linear_model.parameters(),
             cluster_params=cluster_model.parameters(),
+            cam_params = cam_model.parameters(), 
             opt=opt["optimizer"],
             model_type=opt["model"]["name"])
     else:
-        net_optimizer, linear_probe_optimizer, cluster_probe_optimizer = None, None, None
+        net_optimizer, linear_probe_optimizer, cluster_probe_optimizer, cam_optimizer = None, None, None, None
 
     start_epoch, current_iter = 0, 0
     best_metric, best_epoch, best_iter = 0, 0, 0
@@ -115,7 +119,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
     freeze_encoder_bn = opt["train"]["freeze_encoder_bn"]
     freeze_all_bn = opt["train"]["freeze_all_bn"]
 
-    best_valid_metrics = dict(Cluster_mIoU=0, Cluster_Accuracy=0, Linear_mIoU=0, Linear_Accuracy=0)
+    best_valid_metrics = dict(Cluster_mIoU=0, Cluster_Accuracy=0, Linear_mIoU=0, Linear_Accuracy=0, CAM_AUC=0)
     train_stats = RunningAverage()
 
     for current_epoch in range(start_epoch, max_epoch):
@@ -127,6 +131,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
         linear_model.train()
         cluster_model.train()
         project_head.train()
+        cam_model.train()
 
         train_stats.reset()
         _ = timer.update()
@@ -160,6 +165,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
             net_optimizer.zero_grad(set_to_none=True)
             linear_probe_optimizer.zero_grad(set_to_none=True)
             cluster_probe_optimizer.zero_grad(set_to_none=True)
+            cam_optimizer.zero_grad(set_to_none=True)
             head_optimizer.zero_grad(set_to_none=True)
 
             model_input = (img, label)
@@ -197,14 +203,17 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
 
 
             detached_code = torch.clone(model_output[1].detach())
+            code = model_output[1]
             with torch.cuda.amp.autocast(enabled=True):
                 linear_output = linear_model(detached_code)
                 cluster_output = cluster_model(detached_code, None, is_direct=False)
+                cam_output = cam_model(code, cluster_model.clusters)
 
                 loss, loss_dict, corr_dict = criterion(model_input=model_input,
                                                        model_output=model_output,
                                                        linear_output=linear_output,
-                                                       cluster_output=cluster_output
+                                                       cluster_output=cluster_output, 
+                                                       cam_output = cam_output
                                                        )
 
                 loss = loss + loss_supcon + loss_consistency*opt["alpha"]
@@ -227,6 +236,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
 
             scaler.step(linear_probe_optimizer)
             scaler.step(cluster_probe_optimizer)
+            scaler.step(cam_optimizer)
             scaler.step(head_optimizer)
 
             scaler.update()
@@ -263,7 +273,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
             if ((i + 1) % valid_freq == 0) or ((i + 1) == len(train_loader)):
                 _ = timer.update()
                 valid_loss, valid_metrics = evaluate(net_model, linear_model,
-                                                    cluster_model, val_loader,
+                                                    cluster_model, cam_model, val_loader,
                                                      device=device, opt=opt, n_classes=val_dataset.n_classes)
 
                 s = time_log()
@@ -283,6 +293,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
                         "ckpt", net_model, net_optimizer,
                         linear_model, linear_probe_optimizer,
                         cluster_model, cluster_probe_optimizer,
+                        cam_model, cam_optimizer, 
                         current_epoch, current_iter, best_metric, wandb_save_dir, model_only=True)
                     print ("SAVED CHECKPOINT")
 
@@ -302,6 +313,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
                 net_model.train()
                 linear_model.train()
                 cluster_model.train()
+                cam_model.train()
                 train_stats.reset()
 
             _ = timer.update()
@@ -310,8 +322,9 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
     net_model.load_state_dict(checkpoint_loaded['net_model_state_dict'], strict=True)
     linear_model.load_state_dict(checkpoint_loaded['linear_model_state_dict'], strict=True)
     cluster_model.load_state_dict(checkpoint_loaded['cluster_model_state_dict'], strict=True)
+    cam_model.load_state_dict(checkpoint_loaded['cam_model_state_dict'], strict=True)
     loss_out, metrics_out = evaluate(net_model, linear_model,
-        cluster_model, val_loader, device=device, opt=opt, n_classes=train_dataset.n_classes)
+        cluster_model, cam_model, val_loader, device=device, opt=opt, n_classes=train_dataset.n_classes)
     s = time_log()
     for metric_k, metric_v in metrics_out.items():
         s += f"[before CRF] {metric_k} : {metric_v:.2f}\n"
@@ -321,6 +334,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
     net_model.load_state_dict(checkpoint_loaded['net_model_state_dict'], strict=True)
     linear_model.load_state_dict(checkpoint_loaded['linear_model_state_dict'], strict=True)
     cluster_model.load_state_dict(checkpoint_loaded['cluster_model_state_dict'], strict=True)
+    cam_model.load_state_dict(checkpoint_loaded['cam_model_state_dict'], strict=True)
     loss_out, metrics_out = evaluate(net_model, linear_model, cluster_model,
         val_loader, device=device, opt=opt, n_classes=train_dataset.n_classes, is_crf=opt["eval"]["is_crf"])
     s = time_log()
@@ -335,6 +349,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
 def evaluate(net_model: nn.Module,
              linear_model: nn.Module,
              cluster_model: nn.Module,
+             cam_model: nn.Module, 
              eval_loader: DataLoader,
              device: torch.device,
              opt: Dict,
@@ -349,6 +364,7 @@ def evaluate(net_model: nn.Module,
         "Cluster_", n_classes, opt["eval"]["extra_clusters"], True)
     linear_metrics = UnsupervisedMetrics(
         "Linear_", n_classes, 0, False)
+    cam_metrics = BinaryAUROC()
 
     with torch.no_grad():
         eval_stats = RunningAverage()
@@ -361,7 +377,9 @@ def evaluate(net_model: nn.Module,
                 output = net_model(img)
             feats = output[0]
             head_code = output[1]
-
+            
+            with torch.cuda.amp.autocast(enabled=True):
+                heat_map, logits = cam_model(head_code, cluster_model.clusters)
             head_code = F.interpolate(head_code, label.shape[-2:], mode='bilinear', align_corners=False)
 
             if is_crf:
@@ -381,12 +399,18 @@ def evaluate(net_model: nn.Module,
                     cluster_loss, cluster_preds = cluster_model(head_code, None, is_direct=opt["eval"]["is_direct"])
                 cluster_preds = cluster_preds.argmax(1)
 
+            binary_label = torch.zeros_like(label)
+            binary_label[label != 11] = 0
+            binary_label[label == 11] = 1
+            #binary_label = torch.max(torch.max(binary_label, -1)[0], -1)[0]
+            binary_label = (torch.sum(torch.sum(binary_label, -1), -1) > 100)
             linear_metrics.update(linear_preds, label)
             cluster_metrics.update(cluster_preds, label)
+            cam_metrics.update(F.sigmoid(logits), binary_label.long())
 
             eval_stats.append(cluster_loss)
 
-        eval_metrics = get_metrics(cluster_metrics, linear_metrics)
+        eval_metrics = get_metrics(cluster_metrics, linear_metrics, cam_metrics)
 
         return eval_stats.avg, eval_metrics
 

@@ -13,6 +13,7 @@ def save_checkpoint(prefix: str,
                     net_model, net_optimizer,
                     linear_model, linear_optimizer,
                     cluster_model, cluster_optimizer,
+                    cam_model, cam_optimizer,
                     current_epoch, current_iter,
                     best_value, save_dir: str,
                     best_epoch=None, best_iter=None,
@@ -25,6 +26,8 @@ def save_checkpoint(prefix: str,
         linear_model = linear_model.module
     if isinstance(cluster_model, DistributedDataParallel):
         cluster_model = cluster_model.module
+    if isinstance(cam_model, DistributedDataParallel):
+        cam_model = cam_model.module
 
     torch.save(
         {
@@ -38,6 +41,8 @@ def save_checkpoint(prefix: str,
             'linear_optimizer_state_dict': linear_optimizer.state_dict() if (not model_only) else None,
             'cluster_model_state_dict': cluster_model.state_dict(),
             'cluster_optimizer_state_dict': cluster_optimizer.state_dict() if (not model_only) else None,
+            'cam_model_state_dict': cam_model.state_dict(),
+            'cam_optimizer_state_dict': cam_optimizer.state_dict() if (not model_only) else None,
             'best': best_value,
         }, model_name)
 
