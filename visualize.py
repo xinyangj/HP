@@ -26,6 +26,7 @@ def visualization(save_dir: str, dataset_type: str, saved_data: defaultdict, clu
     if is_label:
         os.makedirs(join(save_dir, "label"), exist_ok=True)
     os.makedirs(join(save_dir, "cluster"), exist_ok=True)
+    os.makedirs(join(save_dir, "raw_cluster"), exist_ok=True)
     os.makedirs(join(save_dir, "linear"), exist_ok=True)
     os.makedirs(join(save_dir, "rgb"), exist_ok=True)
     os.makedirs(join(save_dir, "cam"), exist_ok=True)
@@ -46,7 +47,27 @@ def visualization(save_dir: str, dataset_type: str, saved_data: defaultdict, clu
 
         plot_linear = (label_cmap[saved_data["linear_preds"][index]]).astype(np.uint8)
         Image.fromarray(plot_linear).save(join(join(save_dir, "linear", file_name + ".png")))
-
+        '''
+        print(label_cmap.shape)
+        print(saved_data["linear_preds"][index].shape)
+        print(np.unique(saved_data["cluster_preds"][index]))
+        '''
+        plot_rawcluster = (label_cmap[saved_data["cluster_preds"][index]]).astype(np.uint8)
+        out = []
+        '''
+        for row in plot_rawcluster:
+            for c in row:
+                new_one = True
+                for o in out:
+                    if c[0] == o[0] and c[1] == o[1] and c[2] == o[2]:
+                        #print(c, end = " ")
+                        new_one = False
+                if new_one: out.append(list(c))
+                
+            #print()
+        print(out)
+        '''
+        Image.fromarray(plot_rawcluster).save(join(join(save_dir, "raw_cluster", file_name + ".png")))
         img = saved_data['img'][index].cpu().numpy()
         Image.fromarray(img).save(join(join(save_dir, "rgb", file_name + ".png")))
 

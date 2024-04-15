@@ -69,8 +69,8 @@ class VQCAMHead(nn.Module):
 
         inner_products = torch.einsum("bchw,nc->bnhw", normed_features, normed_clusters)
         #one_hot = gumbel_softmax(inner_products, temperature = self.temperature, hard = True)
-        one_hot = F.gumbel_softmax(inner_products, tau = self.temperature, hard = True, dim=1)
-        one_hot_max = F.one_hot(torch.argmax(inner_products, dim = 1), centers.size(0)).permute(0, 3, 1, 2)
+        #one_hot = F.gumbel_softmax(inner_products, tau = self.temperature, hard = True, dim=1)
+        one_hot = F.one_hot(torch.argmax(inner_products, dim = 1), centers.size(0)).permute(0, 3, 1, 2).float()
         #one_hot = F.softmax(inner_products)
         
         #print((one_hot != one_hot_max).sum())

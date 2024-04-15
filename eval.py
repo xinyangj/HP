@@ -226,11 +226,11 @@ def evaluate(net_model: nn.Module,
                     vis_data['img_path'] = torch.cat([vis_data['img_path'], data['ind'][binary_label == 1]], dim = 0)
                     vis_data['label'] = torch.cat([vis_data['label'], label.cpu()[binary_label == 1]], dim = 0)
                     vis_data['linear_preds'] = torch.cat([vis_data['linear_preds'], linear_preds.cpu()[binary_label == 1]], dim = 0)
-                    vis_data['cluster_preds'] = torch.cat([vis_data['linear_preds'], cluster_preds.cpu()[binary_label == 1]], dim = 0)
+                    vis_data['cluster_preds'] = torch.cat([vis_data['cluster_preds'], cluster_preds.cpu()[binary_label == 1]], dim = 0)
                     vis_data['cam_preds'] = torch.cat([vis_data['cam_preds'], heat_map.cpu()[binary_label == 1]], dim = 0)
             print(vis_data['img'].size())
             #print(data.keys())
-            save_dir='vis_tune_code'
+            save_dir='vis_tune_code_debug'
 
         eval_metrics = get_metrics(cluster_metrics, linear_metrics,cam_metrics)
         visualization(save_dir = save_dir,dataset_type = 'voc_stuff',saved_data = vis_data,cluster_metrics = cluster_metrics,is_label = True)
