@@ -27,6 +27,7 @@ def visualization(save_dir: str, dataset_type: str, saved_data: defaultdict, clu
         os.makedirs(join(save_dir, "label"), exist_ok=True)
     os.makedirs(join(save_dir, "cluster"), exist_ok=True)
     os.makedirs(join(save_dir, "raw_cluster"), exist_ok=True)
+    os.makedirs(join(save_dir, "raw_supcluster"), exist_ok=True)
     os.makedirs(join(save_dir, "linear"), exist_ok=True)
     os.makedirs(join(save_dir, "rgb"), exist_ok=True)
     os.makedirs(join(save_dir, "cam"), exist_ok=True)
@@ -53,7 +54,6 @@ def visualization(save_dir: str, dataset_type: str, saved_data: defaultdict, clu
         print(np.unique(saved_data["cluster_preds"][index]))
         '''
         plot_rawcluster = (label_cmap[saved_data["cluster_preds"][index]]).astype(np.uint8)
-        out = []
         '''
         for row in plot_rawcluster:
             for c in row:
@@ -68,6 +68,10 @@ def visualization(save_dir: str, dataset_type: str, saved_data: defaultdict, clu
         print(out)
         '''
         Image.fromarray(plot_rawcluster).save(join(join(save_dir, "raw_cluster", file_name + ".png")))
+        
+        plot_rawsupcluster = (label_cmap[saved_data["supcluster_preds"][index]]).astype(np.uint8)
+        Image.fromarray(plot_rawsupcluster).save(join(join(save_dir, "raw_supcluster", file_name + ".png")))
+        
         img = saved_data['img'][index].cpu().numpy()
         Image.fromarray(img).save(join(join(save_dir, "rgb", file_name + ".png")))
 

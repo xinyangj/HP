@@ -155,14 +155,28 @@ class UnsupervisedMetrics(Metric):
         return {k: 100 * v for k, v in metric_dict.items()}
 
 
-def get_metrics(m1: UnsupervisedMetrics, m2: UnsupervisedMetrics, m3) -> Dict[str, Any]:
+def get_metrics(m1: UnsupervisedMetrics, m2: UnsupervisedMetrics, m3, m4 = None, m5 = None) -> Dict[str, Any]:
     metric_dict_1 = m1.compute()
     metric_dict_2 = m2.compute()
     metric_dict_3 = {'CAM_AUC': m3.compute()}
+
+    if m4 is not None:
+        print(m4)
+        metric_dict_4 = m4.compute()
+
+    if m5 is not None: metric_dict_5 ={'SUPCLUSTER_CAM_AUC': m5.compute()}
+
     metrics = all_reduce_dict(metric_dict_1, op="mean")
     tmp = all_reduce_dict(metric_dict_2, op="mean")
     metrics.update(tmp)
     tmp = all_reduce_dict(metric_dict_3, op="mean")
     metrics.update(tmp)
+    if m4 is not None: 
+        tmp = all_reduce_dict(metric_dict_4, op="mean")
+        metrics.update(tmp)
 
+    if m5 is not None:
+        tmp = all_reduce_dict(metric_dict_5, op="mean")
+        metrics.update(tmp)
+    
     return metrics

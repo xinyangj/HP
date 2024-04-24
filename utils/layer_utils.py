@@ -22,6 +22,7 @@ class ClusterLookup(nn.Module):
             normed_clusters = F.normalize(self.clusters, dim=1)
             normed_features = F.normalize(x, dim=1)
             inner_products = torch.einsum("bchw,nc->bnhw", normed_features, normed_clusters)
+            
 
         if alpha is None:
             cluster_probs = F.one_hot(torch.argmax(inner_products, dim=1), self.clusters.shape[0]) \
@@ -29,8 +30,8 @@ class ClusterLookup(nn.Module):
         else:
             cluster_probs = nn.functional.softmax(inner_products * alpha, dim=1)
         cluster_loss = -(cluster_probs * inner_products).sum(1).mean()
-
+        
         if log_probs:
-            return cluster_loss, nn.functional.log_softmax(inner_products * alpha, dim=1)
+            return cluster_loss, nn.functional.log_softmax(inner_products * alpha, dim=1), inner_products
         else:
-            return cluster_loss, cluster_probs
+            return cluster_loss, cluster_probs,  torch.einsum("bchw,nc->bnhw", x, self.clusters)

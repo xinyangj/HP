@@ -31,8 +31,41 @@ class CAMHead(nn.Module):
         #logits = F.adaptive_max_pool2d(heatmap, 1).squeeze()
         return heatmap, logits
 
+class VQClusterHead(nn.Module):
+    def __init__(self, dim, n_classes, temperature = 1):
+        super().__init__()
+        self.cluster_probe = ClusterLookup(dim, n_classes)
+        self.temperature = temperature
+
+    def forward(self, x, centers, inner_products = None):
+
+        if inner_products is None:
+
+            normed_clusters = centers
+            normed_features = x
+
+            inner_products = torch.einsum("bchw,nc->bnhw", normed_features, normed_clusters)
+            #one_hot = gumbel_softmax(inner_products, temperature = self.temperature, hard = True)
+
+        #else:
+        #    inner_products *= 10
+        
+        one_hot = F.gumbel_softmax(inner_products, tau = self.temperature, hard = True, dim=1)
+
+        #one_hot = F.one_hot(torch.argmax(inner_products, dim = 1), centers.size(0)).permute(0, 3, 1, 2).float()
+        #one_hot = F.softmax(inner_products)
+        
+        #print((one_hot != one_hot_max).sum())
+        #print(one_hot_max.size(), torch.argmax(one_hot_max[0].sum(2).sum(1)))
+        
+        #print(centers.size())
+        #print(one_hot.size())
+        z_q = torch.einsum('b n h w, n d -> b d h w', one_hot, centers)
+        cluster_loss, cluster_preds, cluster_logits = self.cluster_probe(z_q, None, is_direct=False)
+        return cluster_loss, cluster_preds, cluster_logits, z_q
+
 class VQCAMHead(nn.Module):
-    def __init__(self, dim, n_classes, temperature = 10):
+    def __init__(self, dim, n_classes, temperature = 1):#10):
         super().__init__()
         #self.n_classes = n_classes
         #self.class_idx = target_class
@@ -44,7 +77,7 @@ class VQCAMHead(nn.Module):
         #self.att = nn.MultiheadAttention(dim, 1, batch_first=True)
         self.temperature = temperature
         
-    def forward(self, x, centers):
+    def forward(self, x, centers, inner_products = None):
         #x = F.relu(x)
         #x = self.latent(x)
         #x = F.relu(x)
@@ -61,16 +94,20 @@ class VQCAMHead(nn.Module):
         z_q = self.att(normed_features, normed_clusters , normed_clusters)
         
         '''
+        if inner_products is None:
+            #normed_clusters = F.normalize(centers, dim=1)
+            #normed_features = F.normalize(x, dim=1)
+            normed_clusters = centers
+            normed_features = x
+            print(normed_clusters.size(), normed_features.size())
 
-        #normed_clusters = F.normalize(centers, dim=1)
-        #normed_features = F.normalize(x, dim=1)
-        normed_clusters = centers
-        normed_features = x
-
-        inner_products = torch.einsum("bchw,nc->bnhw", normed_features, normed_clusters)
-        #one_hot = gumbel_softmax(inner_products, temperature = self.temperature, hard = True)
-        #one_hot = F.gumbel_softmax(inner_products, tau = self.temperature, hard = True, dim=1)
-        one_hot = F.one_hot(torch.argmax(inner_products, dim = 1), centers.size(0)).permute(0, 3, 1, 2).float()
+            inner_products = torch.einsum("bchw,nc->bnhw", normed_features, normed_clusters)
+            #one_hot = gumbel_softmax(inner_products, temperature = self.temperature, hard = True)
+        #else:
+        #    inner_products *= 10
+        
+        one_hot = F.gumbel_softmax(inner_products, tau = self.temperature, hard = True, dim=1)
+        #one_hot = F.one_hot(torch.argmax(inner_products, dim = 1), centers.size(0)).permute(0, 3, 1, 2).float()
         #one_hot = F.softmax(inner_products)
         
         #print((one_hot != one_hot_max).sum())
@@ -130,8 +167,8 @@ class STEGOmodel(nn.Module):
         self.linear_probe3 = nn.Conv2d(dim, n_classes, (1, 1))
 
         self.cam = VQCAMHead(dim, n_classes + opt["extra_clusters"])
-        
-
+        self.sup_cluster = VQClusterHead(dim, n_classes + opt["extra_supclusters"])
+        self.supcluster_cam = VQCAMHead(dim, n_classes + opt["extra_supclusters"])
 
     def forward(self, x: torch.Tensor):
         return self.net(x)[1]
