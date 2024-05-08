@@ -54,17 +54,37 @@ class StegoLoss(nn.Module):
             corr_loss_dict = {"none": 0}
             corr_loss = torch.tensor(0, device=feats.device)
 
-        linear_loss = self.linear_loss(linear_output, label, self.n_classes)
-        cluster_loss = cluster_output[0]
-        supcluster_loss = supcluster_output[0]
-        cam_loss = self.cam_loss(cam_output[1], label)
-        supcluster_cam_loss = self.cam_loss(supcluster_cam_output[1], label)
-        loss = linear_loss + cluster_loss + cam_loss + supcluster_loss + supcluster_cam_loss
-        loss_dict = {"loss": loss.item(), "corr": corr_loss.item(), "linear": linear_loss.item(),
-                     "cluster": cluster_loss.item(), "cam": cam_loss.item(), "supcluster": supcluster_loss.item(), 
-                     "supcluster_cam": supcluster_cam_loss.item()}
 
-        return loss, loss_dict, corr_loss_dict
+        loss_dict = {}
+        loss_dict['linear'] = self.linear_loss(linear_output, label, self.n_classes)
+        loss_dict['corr'] = corr_loss
+        loss_dict['cluster'] = cluster_output[0]
+        loss_dict['cam'] = self.cam_loss(cam_output[1], label)
+        if len(cam_output) >= 3:
+            loss_dict['h_a'] = cam_output[2]
+        if supcluster_output is not None:
+            loss_dict['supcluster'] = supcluster_output[0]
+        if supcluster_cam_output is not None:
+            loss_dict['supcluster_cam'] = self.cam_loss(supcluster_cam_output[1], label)
+        
+        loss = 0
+        for key in loss_dict:
+            loss += loss_dict[key]
+        loss_dict['loss'] = loss
+
+        ret_dict = {}
+        for key in loss_dict:
+            ret_dict[key] = loss_dict[key].item()
+
+        #cluster_loss = cluster_output[0]    
+        #cam_loss = self.cam_loss(cam_output[1], label)
+        #supcluster_cam_loss = self.cam_loss(supcluster_cam_output[1], label)
+        #loss = linear_loss + cluster_loss + cam_loss + supcluster_loss + supcluster_cam_loss
+        #loss_dict = {"loss": loss.item(), "corr": corr_loss.item(), "linear": linear_loss.item(),
+        #             "cluster": cluster_loss.item(), "cam": cam_loss.item(), "supcluster": supcluster_loss.item(), 
+        #             "supcluster_cam": supcluster_cam_loss.item()}
+
+        return loss_dict['loss'], ret_dict, corr_loss_dict
 
 
 class ContrastiveCorrelationLoss(nn.Module):

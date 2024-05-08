@@ -1,11 +1,11 @@
 {
-    "gpu_ids": [1],
+    "gpu_ids": [0],
     "output_dir": "./output/",
-    "checkpoint": "hp_cam_vq_tune_code_hie3",
+    "checkpoint": "",
     "wandb": {
         "project": "xinyangj001",
         "entity": "xinyangj",
-        "name": "hp_cam_tunecode_hie_eval",
+        "name": "hp_cam_vq_tune_code_hie3",
         "mode": "online"
     },
     "dataset": {
@@ -39,7 +39,7 @@
         "arch" : "dino",
         "continuous" : true,
         "dim" : 512,
-        "extra_clusters" : 0,
+        "extra_clusters" : -0,
         "extra_supclusters" : -10,
         "bn_momentum" : null,
         "bn_eps" : null,
@@ -81,15 +81,19 @@
             "name" : "adam",
             "lr" : 1e-3
         },
-        "cluster" : {
-            "name" : "adam",
-            "lr" : 5e-3
-        }, 
         "cam" : {
             "name" : "adam",
             "lr" : 1e-3
         },
-        "supcluster" : {
+        "cluster" : {
+            "name" : "adam",
+            "lr" : 5e-3
+        },
+	"supcluster" : {
+            "name" : "adam",
+            "lr" : 5e-3
+        }, 
+        "supcluster_cam" : {
             "name" : "adam",
             "lr" : 5e-3
         }
@@ -97,7 +101,7 @@
     "scheduler": {
     },
     "train": {
-        "print_freq": 25,
+        "print_freq": 10,
         "valid_freq": 100,
         "epoch" : 3,
         "freeze_encoder_bn" : false,
@@ -107,10 +111,10 @@
 
     },
     "eval": {
-        "extra_clusters" : 0,
+        "extra_clusters" : -0,
         "extra_supclusters" : -10,
         "n_images": 5,
-        "is_crf" : false,
+        "is_crf" : true,
         "is_visualize" : false,
         "is_direct" :  false,
         "is_diff" : false

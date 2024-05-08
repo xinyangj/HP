@@ -217,16 +217,16 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
                 cluster_output = cluster_model(detached_code, None, is_direct=False)
 
                 cam_output = cam_model(code, cluster_model.clusters)#, cluster_output[2])
-                supcluster_loss, supcluster_preds, supcluster_innerproducts, vq_code = supcluster_model(detached_code, cluster_model.clusters)#, cluster_output[2])
-                supcluster_cam_output = supcluster_cam_model(vq_code, supcluster_model.cluster_probe.clusters)#, supcluster_innerproducts)
+                #supcluster_loss, supcluster_preds, supcluster_innerproducts, vq_code = supcluster_model(detached_code, cluster_model.clusters)#, cluster_output[2])
+                #supcluster_cam_output = supcluster_cam_model(vq_code, supcluster_model.cluster_probe.clusters)#, supcluster_innerproducts)
 
                 loss, loss_dict, corr_dict = criterion(model_input=model_input,
                                                        model_output=model_output,
                                                        linear_output=linear_output,
                                                        cluster_output=cluster_output, 
                                                        cam_output = cam_output, 
-                                                       supcluster_output = (supcluster_loss, supcluster_preds), 
-                                                       supcluster_cam_output = supcluster_cam_output
+                                                       #supcluster_output = (supcluster_loss, supcluster_preds), 
+                                                       #supcluster_cam_output = supcluster_cam_output
                                                        )
 
                 loss = loss + loss_supcon + loss_consistency*opt["alpha"]
@@ -251,8 +251,8 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
             scaler.step(cluster_probe_optimizer)
             scaler.step(cam_optimizer)
             scaler.step(head_optimizer)
-            scaler.step(supcluster_optimizer)
-            scaler.step(supcluster_cam_optimizer)
+            #scaler.step(supcluster_optimizer)
+            #scaler.step(supcluster_cam_optimizer)
 
             scaler.update()
 
@@ -432,9 +432,10 @@ def evaluate(net_model: nn.Module,
                 
 
                 with torch.cuda.amp.autocast(enabled=True):
-                    heat_map, logits = cam_model(head_code, cluster_model.clusters)#, cluster_innerproducts)
-                    supcluster_loss, supcluster_preds, supcluster_innerproducts, vq_code = supcluster_model(head_code, cluster_model.clusters) #, cluster_innerproducts)
-                    supcluster_heat_map, supcluster_logits = supcluster_cam_model(vq_code, supcluster_model.cluster_probe.clusters) #, supcluster_innerproducts)
+                    cam_output = cam_model(head_code, cluster_model.clusters)#, cluster_innerproducts)
+                    heat_map, logits, supcluster_preds = cam_output[0], cam_output[1], cam_output[3]
+                    #supcluster_loss, supcluster_preds, supcluster_innerproducts, vq_code = supcluster_model(head_code, cluster_model.clusters) #, cluster_innerproducts)
+                    #supcluster_heat_map, supcluster_logits = supcluster_cam_model(vq_code, supcluster_model.cluster_probe.clusters) #, supcluster_innerproducts)
 
                 cluster_preds = cluster_preds.argmax(1)
                 supcluster_preds = supcluster_preds.argmax(1)
@@ -448,13 +449,13 @@ def evaluate(net_model: nn.Module,
             binary_label = (torch.sum(torch.sum(binary_label, -1), -1) > 100)
             linear_metrics.update(linear_preds, label)
             cluster_metrics.update(cluster_preds, label)
-            supcluster_metrics.update(supcluster_preds, label)
+            #supcluster_metrics.update(supcluster_preds, label)
             cam_metrics.update(F.sigmoid(logits), binary_label.long())
-            supcluster_cam_metrics.update(F.sigmoid(supcluster_logits), binary_label.long())
+            #supcluster_cam_metrics.update(F.sigmoid(supcluster_logits), binary_label.long())
 
             eval_stats.append(cluster_loss)
 
-        eval_metrics = get_metrics(cluster_metrics, linear_metrics, cam_metrics, None, supcluster_cam_metrics)
+        eval_metrics = get_metrics(cluster_metrics, linear_metrics, cam_metrics, None, None)
 
         return eval_stats.avg, eval_metrics
 

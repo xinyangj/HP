@@ -174,9 +174,9 @@ def evaluate(net_model: nn.Module,
             head_code = F.interpolate(head_code, label.shape[-2:], mode='bilinear', align_corners=False)
             #heat_map = F.interpolate(heat_map, label.shape[-2:], mode='bilinear', align_corners=False)
 
-            with torch.cuda.amp.autocast(enabled=True):
-                supcluster_loss, supcluster_preds, supcluster_innerproducts, vq_code = supcluster_model(head_code, cluster_model.clusters)
-                heat_map, logits = cam_model(vq_code, supcluster_model.cluster_probe.clusters)
+            #with torch.cuda.amp.autocast(enabled=True):
+            #    supcluster_loss, supcluster_preds, supcluster_innerproducts, vq_code = supcluster_model(head_code, cluster_model.clusters)
+            #    heat_map, logits = cam_model(vq_code, supcluster_model.cluster_probe.clusters)
                 #heat_map = F.sigmoid(heat_map)
 
             if is_crf:
@@ -194,6 +194,8 @@ def evaluate(net_model: nn.Module,
 
                 with torch.cuda.amp.autocast(enabled=True):
                     cluster_loss, cluster_preds, cluster_innerproducts = cluster_model(head_code, None, is_direct=opt["eval"]["is_direct"])
+                    cam_output = cam_model(head_code, cluster_model.clusters)
+                    heat_map, logits, supcluster_preds= cam_output[0], cam_output[1], cam_output[3]
                 cluster_preds = cluster_preds.argmax(1)
                 supcluster_preds = supcluster_preds.argmax(1)
 
