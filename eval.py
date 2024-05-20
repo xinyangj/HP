@@ -230,7 +230,7 @@ def evaluate(net_model: nn.Module,
                     vis_data['cam_preds'] = torch.cat([vis_data['cam_preds'], heat_map.cpu()[binary_label == 1]], dim = 0)
             print(vis_data['img'].size())
             #print(data.keys())
-            save_dir='vis_tune_code_debug'
+            save_dir='vis_tune_code_debug1'
 
         eval_metrics = get_metrics(cluster_metrics, linear_metrics,cam_metrics)
         visualization(save_dir = save_dir,dataset_type = 'voc_stuff',saved_data = vis_data,cluster_metrics = cluster_metrics,is_label = True)

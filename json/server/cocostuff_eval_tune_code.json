@@ -1,5 +1,5 @@
 {
-    "gpu_ids": [1],
+    "gpu_ids": [2],
     "output_dir": "./output/",
     "checkpoint": "hp_cam_vq_tune_code",
     "wandb": {
