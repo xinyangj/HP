@@ -29,8 +29,8 @@ class ClusterLookup(nn.Module):
         else:
             cluster_probs = nn.functional.softmax(inner_products * alpha, dim=1)
         cluster_loss = -(cluster_probs * inner_products).sum(1).mean()
-
+        
         if log_probs:
             return cluster_loss, nn.functional.log_softmax(inner_products * alpha, dim=1)
         else:
-            return cluster_loss, cluster_probs
+            return cluster_loss, inner_products #cluster_probs

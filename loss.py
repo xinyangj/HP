@@ -37,7 +37,7 @@ class StegoLoss(nn.Module):
         self.cam_loss = CamLoss()
 
     def forward(self, model_input, model_output, model_pos_output=None, linear_output: torch.Tensor() = None,
-                cluster_output: torch.Tensor() = None, cam_output = None) \
+                cluster_output: torch.Tensor() = None, cam_output = None, supcluster_output = None, supcluster_cam_output = None) \
             -> Tuple[torch.Tensor, Dict[str, float]]:
         img, label = model_input
         # feats, code = model_output
@@ -56,9 +56,13 @@ class StegoLoss(nn.Module):
         linear_loss = self.linear_loss(linear_output, label, self.n_classes)
         cluster_loss = cluster_output[0]
         cam_loss = self.cam_loss(cam_output[1], label)
-        loss = linear_loss + cluster_loss + cam_loss
+        supcluster_loss = supcluster_output[0]
+        supcluster_cam_loss = self.cam_loss(supcluster_cam_output[1], label)
+
+        loss = linear_loss + cluster_loss + cam_loss + supcluster_loss + supcluster_cam_loss
         loss_dict = {"loss": loss.item(), "corr": corr_loss.item(), "linear": linear_loss.item(),
-                     "cluster": cluster_loss.item(), "cam": cam_loss.item()}
+                     "cluster": cluster_loss.item(), "cam": cam_loss.item(), 
+                     "supcluster": supcluster_loss.item(), "supcluster_cam": supcluster_cam_loss.item()}
 
         return loss, loss_dict, corr_loss_dict
 

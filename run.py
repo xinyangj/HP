@@ -55,7 +55,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
                                   batch_size=16)
 
     # -------------------------- Define -------------------------------#
-    net_model, linear_model, cluster_model, cam_model = build_model(opt=opt["model"],
+    net_model, linear_model, cluster_model, cam_model, supcluster_model, supcluster_cam_model = build_model(opt=opt["model"],
                                                          n_classes=val_dataset.n_classes,
                                                          is_direct=opt["eval"]["is_direct"])
 
@@ -67,6 +67,8 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
     linear_model = linear_model.to(device)
     cluster_model = cluster_model.to(device)
     cam_model = cam_model.to(device)
+    supcluster_model = supcluster_model.to(device)
+    supcluster_cam_model = supcluster_cam_model.to(device)
     
 
     project_head = nn.Linear(opt['model']['dim'], opt['model']['dim'])
@@ -85,15 +87,17 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
 
     # ------------------- Optimizer  -----------------------#
     if is_train:
-        net_optimizer, linear_probe_optimizer, cluster_probe_optimizer, cam_optimizer = build_optimizer(
+        net_optimizer, linear_probe_optimizer, cluster_probe_optimizer, cam_optimizer, supcluster_optimizer, supcluster_cam_optimizer = build_optimizer(
             main_params=model_m.parameters(),
             linear_params=linear_model.parameters(),
             cluster_params=cluster_model.parameters(),
             cam_params = cam_model.parameters(), 
+            supcluster_params = supcluster_model.parameters(), 
+            supcluster_cam_params = supcluster_cam_model.parameters(), 
             opt=opt["optimizer"],
             model_type=opt["model"]["name"])
     else:
-        net_optimizer, linear_probe_optimizer, cluster_probe_optimizer, cam_optimizer = None, None, None, None
+        net_optimizer, linear_probe_optimizer, cluster_probe_optimizer, cam_optimizer, supcluster_optimizer, supcluster_cam_optimizer  = None, None, None, None, None, None
 
     start_epoch, current_iter = 0, 0
     best_metric, best_epoch, best_iter = 0, 0, 0
@@ -119,7 +123,8 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
     freeze_encoder_bn = opt["train"]["freeze_encoder_bn"]
     freeze_all_bn = opt["train"]["freeze_all_bn"]
 
-    best_valid_metrics = dict(Cluster_mIoU=0, Cluster_Accuracy=0, Linear_mIoU=0, Linear_Accuracy=0, CAM_AUC=0)
+    best_valid_metrics = dict(Cluster_mIoU=0, Cluster_Accuracy=0, Linear_mIoU=0, Linear_Accuracy=0, CAM_AUC=0, 
+                                SupCluster_mIoU=0, SupCluster_Accuracy=0, SUPCLUSTER_CAM_AUC = 0)
     train_stats = RunningAverage()
 
     for current_epoch in range(start_epoch, max_epoch):
@@ -132,6 +137,8 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
         cluster_model.train()
         project_head.train()
         cam_model.train()
+        supcluster_model.train()
+        supcluster_cam_model.train()
 
         train_stats.reset()
         _ = timer.update()
@@ -167,6 +174,9 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
             cluster_probe_optimizer.zero_grad(set_to_none=True)
             cam_optimizer.zero_grad(set_to_none=True)
             head_optimizer.zero_grad(set_to_none=True)
+            supcluster_optimizer.zero_grad(set_to_none=True)
+            supcluster_cam_optimizer.zero_grad(set_to_none=True)
+            
 
             model_input = (img, label)
 
@@ -208,12 +218,17 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
                 linear_output = linear_model(detached_code)
                 cluster_output = cluster_model(detached_code, None, is_direct=False)
                 cam_output = cam_model(code, cluster_model.clusters)
+                supcluster_output = supcluster_model(detached_code, cluster_model.clusters.detach(), None, is_direct=False)
+                supcluster_cam_output  = supcluster_cam_model(code, supcluster_model.clusters.detach())
 
                 loss, loss_dict, corr_dict = criterion(model_input=model_input,
                                                        model_output=model_output,
                                                        linear_output=linear_output,
                                                        cluster_output=cluster_output, 
-                                                       cam_output = cam_output
+                                                       cam_output = cam_output, 
+                                                       supcluster_output = supcluster_output, 
+                                                       supcluster_cam_output = supcluster_cam_output 
+
                                                        )
 
                 loss = loss + loss_supcon + loss_consistency*opt["alpha"]
@@ -238,6 +253,8 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
             scaler.step(cluster_probe_optimizer)
             scaler.step(cam_optimizer)
             scaler.step(head_optimizer)
+            scaler.step(supcluster_optimizer)
+            scaler.step(supcluster_cam_optimizer)
 
             scaler.update()
 
@@ -270,11 +287,12 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
                 print(s)
 
             # --------------------------- Valid --------------------------------#
+            #if True:
             if ((i + 1) % valid_freq == 0) or ((i + 1) == len(train_loader)):
                 _ = timer.update()
                 valid_loss, valid_metrics = evaluate(net_model, linear_model,
-                                                    cluster_model, cam_model, val_loader,
-                                                     device=device, opt=opt, n_classes=val_dataset.n_classes)
+                                                    cluster_model, cam_model, supcluster_model, supcluster_cam_model,
+                                                    val_loader, device=device, opt=opt, n_classes=val_dataset.n_classes)
 
                 s = time_log()
                 s += f"[VAL] -------- [{current_epoch}/{max_epoch} (iters: {current_iter})]--------\n"
@@ -283,8 +301,12 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
 
                 metric = "All"
                 prev_best_metric = best_metric
-                if best_metric <= (valid_metrics["Cluster_mIoU"] + valid_metrics["Cluster_Accuracy"] + valid_metrics["Linear_mIoU"] + valid_metrics["Linear_Accuracy"]):
-                    best_metric = (valid_metrics["Cluster_mIoU"] + valid_metrics["Cluster_Accuracy"] + valid_metrics["Linear_mIoU"] + valid_metrics["Linear_Accuracy"])
+                #print(valid_metrics["Cluster_mIoU"], valid_metrics["CAM_AUC"], valid_metrics["SupCluster_mIoU"], valid_metrics["SUPCLUSTER_CAM_AUC"])
+
+                
+                if best_metric <= (valid_metrics["Cluster_mIoU"] / 100 + valid_metrics["CAM_AUC"] + valid_metrics["SupCluster_mIoU"] / 100 + valid_metrics["SUPCLUSTER_CAM_AUC"]):
+                #if best_metric <= (valid_metrics["Cluster_mIoU"] + valid_metrics["Cluster_Accuracy"] + valid_metrics["Linear_mIoU"] + valid_metrics["Linear_Accuracy"]):
+                    best_metric = valid_metrics["Cluster_mIoU"] / 100 + valid_metrics["CAM_AUC"] + valid_metrics["SupCluster_mIoU"] / 100 + valid_metrics["SUPCLUSTER_CAM_AUC"]
                     best_epoch = current_epoch
                     best_iter = current_iter
                     s += f"[VAL] -------- updated ({metric})! {prev_best_metric:.6f} -> {best_metric:.6f}\n"
@@ -294,6 +316,8 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
                         linear_model, linear_probe_optimizer,
                         cluster_model, cluster_probe_optimizer,
                         cam_model, cam_optimizer, 
+                        supcluster_model, supcluster_optimizer, 
+                        supcluster_cam_model, supcluster_cam_optimizer,
                         current_epoch, current_iter, best_metric, wandb_save_dir, model_only=True)
                     print ("SAVED CHECKPOINT")
 
@@ -301,7 +325,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
                         s += f"[VAL] {metric_k} : {best_valid_metrics[metric_k]:.6f} -> {metric_v:.6f}\n"
                     best_valid_metrics.update(valid_metrics)
                 else:
-                    now_metric = valid_metrics["Cluster_mIoU"] + valid_metrics["Cluster_Accuracy"] + valid_metrics["Linear_mIoU"] + valid_metrics["Linear_Accuracy"]
+                    now_metric = valid_metrics["Cluster_mIoU"] / 100+ valid_metrics["CAM_AUC"] + valid_metrics["SupCluster_mIoU"] /100 + valid_metrics["SUPCLUSTER_CAM_AUC"]
                     s += f"[VAL] -------- not updated ({metric})." \
                          f" (now) {now_metric:.6f} vs (best) {prev_best_metric:.6f}\n"
                     s += f"[VAL] previous best was at {best_epoch} epoch, {best_iter} iters\n"
@@ -314,6 +338,8 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
                 linear_model.train()
                 cluster_model.train()
                 cam_model.train()
+                supcluster_model.train()
+                supcluster_cam_model.train()
                 train_stats.reset()
 
             _ = timer.update()
@@ -323,8 +349,11 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
     linear_model.load_state_dict(checkpoint_loaded['linear_model_state_dict'], strict=True)
     cluster_model.load_state_dict(checkpoint_loaded['cluster_model_state_dict'], strict=True)
     cam_model.load_state_dict(checkpoint_loaded['cam_model_state_dict'], strict=True)
+    supcluster_model.load_state_dict(checkpoint_loaded['supcluster_model_state_dict'], strict=True)
+    supcluster_cam_model.load_state_dict(checkpoint_loaded['supcluster_cam_model_state_dict'], strict=True)
     loss_out, metrics_out = evaluate(net_model, linear_model,
-        cluster_model, cam_model, val_loader, device=device, opt=opt, n_classes=train_dataset.n_classes)
+        cluster_model, cam_model, supcluster_model, supcluster_cam_model, 
+        val_loader, device=device, opt=opt, n_classes=train_dataset.n_classes)
     s = time_log()
     for metric_k, metric_v in metrics_out.items():
         s += f"[before CRF] {metric_k} : {metric_v:.2f}\n"
@@ -350,6 +379,8 @@ def evaluate(net_model: nn.Module,
              linear_model: nn.Module,
              cluster_model: nn.Module,
              cam_model: nn.Module, 
+             supcluster_model: nn.Module,
+             supcluster_cam_model: nn.Module,
              eval_loader: DataLoader,
              device: torch.device,
              opt: Dict,
@@ -359,12 +390,20 @@ def evaluate(net_model: nn.Module,
              ) -> Tuple[float, Dict[str, float]]:
 
     net_model.eval()
+    linear_model.eval()
+    cluster_model.eval()
+    cam_model.eval()
+    supcluster_model.eval()
+    supcluster_cam_model.eval()
 
     cluster_metrics = UnsupervisedMetrics(
         "Cluster_", n_classes, opt["eval"]["extra_clusters"], True)
+    supcluster_metrics = UnsupervisedMetrics(
+        "SupCluster_", n_classes, opt["eval"]["extra_supclusters"], True)
     linear_metrics = UnsupervisedMetrics(
         "Linear_", n_classes, 0, False)
     cam_metrics = BinaryAUROC()
+    supcluster_cam_metrics = BinaryAUROC()
 
     with torch.no_grad():
         eval_stats = RunningAverage()
@@ -380,6 +419,9 @@ def evaluate(net_model: nn.Module,
             
             with torch.cuda.amp.autocast(enabled=True):
                 heat_map, logits = cam_model(head_code, cluster_model.clusters)
+                supcluster_output = supcluster_model(head_code, cluster_model.clusters, None, is_direct=False)
+                supcluster_heat_map, supcluster_logits  = supcluster_cam_model(head_code, supcluster_model.clusters)
+
             head_code = F.interpolate(head_code, label.shape[-2:], mode='bilinear', align_corners=False)
 
             if is_crf:
@@ -397,7 +439,9 @@ def evaluate(net_model: nn.Module,
 
                 with torch.cuda.amp.autocast(enabled=True):
                     cluster_loss, cluster_preds = cluster_model(head_code, None, is_direct=opt["eval"]["is_direct"])
+                    supcluster_loss, supcluster_preds = supcluster_model(head_code, cluster_model.clusters, None, is_direct=False)
                 cluster_preds = cluster_preds.argmax(1)
+                supcluster_preds = supcluster_preds.argmax(1)
 
             binary_label = torch.zeros_like(label)
             binary_label[label != 11] = 0
@@ -406,11 +450,13 @@ def evaluate(net_model: nn.Module,
             binary_label = (torch.sum(torch.sum(binary_label, -1), -1) > 100)
             linear_metrics.update(linear_preds, label)
             cluster_metrics.update(cluster_preds, label)
+            supcluster_metrics.update(supcluster_preds, label)
             cam_metrics.update(F.sigmoid(logits), binary_label.long())
+            supcluster_cam_metrics.update(F.sigmoid(supcluster_logits), binary_label.long())
 
             eval_stats.append(cluster_loss)
 
-        eval_metrics = get_metrics(cluster_metrics, linear_metrics, cam_metrics)
+        eval_metrics = get_metrics(cluster_metrics, linear_metrics, cam_metrics, supcluster_metrics, supcluster_cam_metrics)
 
         return eval_stats.avg, eval_metrics
 

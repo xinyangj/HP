@@ -7,7 +7,131 @@ from utils.layer_utils import ClusterLookup
 import numpy as np
 import torch.distributed as dist
 from utils.dist_utils import all_reduce_tensor, all_gather_tensor
+from model.graph_constructor import GraphConstructor
+from torch_geometric.nn.conv import MixHopConv, GCNConv
+from matplotlib import pyplot as plt
 
+
+class VQAttCAMHead(nn.Module):
+    def __init__(self, dim, n_classes, temperature = 10):
+        super().__init__()
+        #self.n_classes = n_classes
+        #self.class_idx = target_class
+        #self.latent = nn.Conv2d(dim, 256, (1, 1))
+        #self.classifier = nn.Conv2d(dim, 2, (1, 1))
+        #self.classifier2 = nn.Conv2d(256, 2, (1, 1))
+        #self.out_feat = nn.Conv2d(n_classes, dim, (1, 1))
+        self.binary_classifier = nn.Conv2d(dim, 1, (1, 1))
+        self.att = nn.MultiheadAttention(dim, 1)
+        #self.att = nn.MultiheadAttention(dim, 1, batch_first=True)
+        self.temperature = temperature
+        
+    def forward(self, x, centers):
+        #x = F.relu(x)
+        #x = self.latent(x)
+        #x = F.relu(x)
+        #heatmap = self.classifier2(x)
+        #heatmap = self.classifier(x)
+
+        #centers = centers.clone().detach()
+        '''
+        normed_clusters = F.normalize(centers, dim=1).unsqueeze(0).repeat(x.size(0), 1, 1)
+        normed_features = F.normalize(x, dim=1).permute(0, 2, 3, 1)
+        normed_features = normed_features.reshape(x.size(0), -1, x.size(1))
+        print(normed_clusters.size(), normed_features.size())
+        
+        z_q = self.att(normed_features, normed_clusters , normed_clusters)
+        
+        '''
+
+        normed_clusters = centers
+        normed_features = x
+
+        inner_products = torch.einsum("bchw,nc->bnhw", normed_features, normed_clusters)
+        one_hot = F.gumbel_softmax(inner_products, tau = self.temperature, hard = True, dim=1)
+        z_q = torch.einsum('b n h w, n d -> b d h w', one_hot, centers)
+
+        z_q = z_q.permute((0, 2, 3, 1)).reshape(x.size(0), x.size(2) * x.size(3), -1)
+        z_q, a = self.att(z_q, z_q, z_q)
+        z_q = z_q.reshape(x.size(0), x.size(2), x.size(3), -1).permute(0, 3, 1, 2)    
+        
+        heatmap = self.binary_classifier(z_q)
+        #heatmap = F.sigmoid(heatmap / self.temperature)
+        logits = F.adaptive_avg_pool2d(heatmap, 1).squeeze()
+        #logits = F.adaptive_max_pool2d(heatmap, 1).squeeze()
+
+        #print(one_hot_max[:].unsqueeze(1).sum())
+        #raise SystemExit
+
+
+        return heatmap, logits #one_hot[:, 93].unsqueeze(1).float(), logits #heatmap, logits
+
+
+
+class ClusterOnGNN(nn.Module):
+    def __init__(self, dim: int, n_classes: int):
+        super(ClusterOnGNN, self).__init__()
+        self.n_classes = n_classes
+        self.dim = dim
+        self.bn = torch.nn.BatchNorm2d(dim)
+        self.clusters = None
+        self.lin = nn.Conv2d(dim, dim, (1, 1))
+        self.graph_constructor = GraphConstructor(n_classes, 5, dim)
+        self.gcn = GCNConv(dim, dim, bias = False)
+
+    def reset_parameters(self):
+        with torch.no_grad():
+            self.clusters.copy_(torch.randn(self.n_classes, self.dim))
+
+    def forward(self, x, centers, alpha, log_probs=False, is_direct=False):
+        A = self.graph_constructor(centers)
+        edge_index = A.nonzero().t().contiguous()
+        edge_weight = A[edge_index[0], edge_index[1]]
+
+        data = np.abs(A.detach().cpu().numpy().copy())
+        plt.figure(figsize = (10,10))
+        plt.imshow(data, interpolation='nearest')
+        plt.show()
+        plt.savefig('A.png')
+        plt.close()
+
+        fig, ax = plt.subplots(figsize = (10,10))
+        selector = [10, 29, 3, 44, 46, 53, 69]
+        data = (A[selector][:, selector] + A[selector][:, selector].t())
+        #ax = plt.gca()
+        
+        #plt.figure()
+        plt.imshow(data.detach().cpu().numpy().copy(), interpolation='nearest')
+        ax.set_xticklabels(['', 'sky', 'road', 'vehicle', 'car body', 'window', 'wheel', 'grass'])
+        ax.set_yticklabels(['', 'sky', 'road', 'vehicle', 'car body', 'window', 'wheel', 'grass'])
+        plt.show()
+        plt.savefig('a.png')
+        plt.close()
+
+        self.clusters = self.gcn(centers, edge_index, edge_weight)
+        #features = self.lin(x)
+        #features = self.bn(features)
+        
+
+        if is_direct:
+            inner_products = x
+        else:
+            normed_clusters = F.normalize(self.clusters, dim=1)
+            normed_features = F.normalize(x, dim=1)
+            inner_products = torch.einsum("bchw,nc->bnhw", normed_features, normed_clusters)
+
+        if alpha is None:
+            cluster_probs = F.one_hot(torch.argmax(inner_products, dim=1), self.clusters.shape[0]) \
+                .permute(0, 3, 1, 2).to(torch.float32)
+        else:
+            cluster_probs = nn.functional.softmax(inner_products * alpha, dim=1)
+        cluster_loss = -(cluster_probs * inner_products).sum(1).mean()
+
+        if log_probs:
+            return cluster_loss, nn.functional.log_softmax(inner_products * alpha, dim=1)
+        else:
+            return cluster_loss, inner_products #cluster_probs
+    
 
 class CAMHead(nn.Module):
     def __init__(self, dim):
@@ -130,8 +254,9 @@ class STEGOmodel(nn.Module):
         self.linear_probe3 = nn.Conv2d(dim, n_classes, (1, 1))
 
         self.cam = VQCAMHead(dim, n_classes + opt["extra_clusters"])
+        self.sup_cluster = ClusterOnGNN(dim, n_classes + opt["extra_clusters"])
+        self.supcluster_cam = VQCAMHead(dim, n_classes + opt["extra_clusters"])
         
-
 
     def forward(self, x: torch.Tensor):
         return self.net(x)[1]

@@ -27,14 +27,24 @@ def visualization(save_dir: str, dataset_type: str, saved_data: defaultdict, clu
         os.makedirs(join(save_dir, "label"), exist_ok=True)
     os.makedirs(join(save_dir, "cluster"), exist_ok=True)
     os.makedirs(join(save_dir, "raw_cluster"), exist_ok=True)
+    os.makedirs(join(save_dir, "raw_supcluster"), exist_ok=True)
     os.makedirs(join(save_dir, "linear"), exist_ok=True)
     os.makedirs(join(save_dir, "rgb"), exist_ok=True)
     os.makedirs(join(save_dir, "cam"), exist_ok=True)
+    os.makedirs(join(save_dir, "supcluster_cam"), exist_ok=True)
+    os.makedirs(join(save_dir, "concepts"), exist_ok=True)
+
+
 
     if dataset_type.startswith("cityscapes"):
         label_cmap = create_cityscapes_colormap()
     else:
         label_cmap = create_pascal_label_colormap()
+
+    #for i, v in enumerate(label_cmap):
+    #    if v ==  [128, 128, 0]:
+    #        print(i)
+    #        raise SystemExit
 
     for index in range(len(saved_data["img_path"])):
         file_name = str(saved_data["img_path"][index]).split("/")[-1].split(".")[0]
@@ -53,7 +63,6 @@ def visualization(save_dir: str, dataset_type: str, saved_data: defaultdict, clu
         print(np.unique(saved_data["cluster_preds"][index]))
         '''
         plot_rawcluster = (label_cmap[saved_data["cluster_preds"][index]]).astype(np.uint8)
-        out = []
         '''
         for row in plot_rawcluster:
             for c in row:
@@ -68,14 +77,78 @@ def visualization(save_dir: str, dataset_type: str, saved_data: defaultdict, clu
         print(out)
         '''
         Image.fromarray(plot_rawcluster).save(join(join(save_dir, "raw_cluster", file_name + ".png")))
+        
+
+        plot_rawsupcluster = (label_cmap[saved_data["supcluster_preds"][index]]).astype(np.uint8)
+        Image.fromarray(plot_rawsupcluster).save(join(join(save_dir, "raw_supcluster", file_name + ".png")))
+        
         img = saved_data['img'][index].cpu().numpy()
         Image.fromarray(img).save(join(join(save_dir, "rgb", file_name + ".png")))
 
+
         plot_cam = saved_data['cam_preds'][index].cpu().numpy()
         plt.imshow(plot_cam, cmap = 'jet')
+        plt.colorbar()
         #cbar = plt.colorbar(ticks=[0, 1]) 
- 
         plt.savefig(join(join(save_dir, "cam", file_name + ".png")))
+        plt.clf()
+
+        plot_cam = saved_data['supcluster_cam_preds'][index].cpu().numpy()
+        plt.imshow(plot_cam, cmap = 'jet')
+        plt.colorbar()
+        plt.savefig(join(join(save_dir, "supcluster_cam", file_name + ".png")))
+        plt.clf()
+
+
+
+        cluster_logits = saved_data['cluster_conf'][index]
+        supcluster_logits = saved_data['supcluster_conf'][index]
+        cluster_logits = F.softmax(cluster_logits, dim = 0)
+        supcluster_logits = F.softmax(supcluster_logits, dim = 0)
+        cluster_preds = saved_data['cluster_preds'][index]
+        supcluster_preds = saved_data['supcluster_preds'][index]
+        heatmap = saved_data['supcluster_cam_preds'][index]#F.sigmoid(saved_data['cam_preds'][index])
+        heatmap = heatmap.squeeze()
+
+
+        n_concepts = cluster_logits.shape[0]
+
+        #heatmap_max = np.max(heatmap, axis = (1, 2))
+        #heatmap_min = np.min(heatmap, axis = (1, 2))
+        #heatmap = (heatmap - heatmap_min[:, None, None]) / (heatmap_max - heatmap_min)[:, None, None]
+        
+        #print(index, 'fo')
+        for i_concept in range(n_concepts):
+            
+
+            concept_mask = (cluster_preds == i_concept)
+            supconcept_mask = (supcluster_preds == i_concept)
+
+            if concept_mask.sum() < supconcept_mask.sum():
+                concept_mask = supconcept_mask
+                cluster_logits = supcluster_logits
+
+            if concept_mask.sum() < 1000:
+                continue
+
+            #if heatmap[concept_mask].mean() < 10:
+            #    continue
+            
+            #if cluster_logits[i_concept][concept_mask].mean() < 0.015:
+            #    continue
+            
+            os.makedirs(join(save_dir, "concepts", "%05d"%i_concept), exist_ok=True)
+            print('foooo')
+            plt.imshow(img)
+            plt.imshow(cluster_logits[i_concept].cpu().numpy(), cmap='jet', alpha=0.5, vmin = 0.0, vmax = 0.02)
+            #plt.imshow(concept_mask.cpu().numpy(), cmap='jet', alpha=0.5, vmin = 0, vmax = 0.04)
+            plt.colorbar()
+            plt.savefig(join(join(save_dir, "concepts", "%05d"%i_concept, file_name + ".png")))
+            plt.clf()
+            
+
+ 
+        
 
 def visualization_label(save_dir: str, saved_data: defaultdict):
     label_cmap = create_pascal_label_colormap()
