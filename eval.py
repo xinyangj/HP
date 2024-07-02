@@ -156,6 +156,11 @@ def evaluate(net_model: nn.Module,
              ) -> Tuple[float, Dict[str, float]]:
 
     net_model.eval()
+    linear_model.eval()
+    cluster_model.eval()
+    cam_model.eval()
+    supcluster_model.eval()
+    supcluster_cam_model.eval()
 
     cluster_metrics = UnsupervisedMetrics(
         "Cluster_", n_classes, opt["eval"]["extra_clusters"], True)
@@ -179,22 +184,25 @@ def evaluate(net_model: nn.Module,
         for i, data in enumerate(tqdm(eval_loader)):
             img: torch.Tensor = data['img'].to(device, non_blocking=True)
             label: torch.Tensor = data['label'].to(device, non_blocking=True)
-
+            
             with torch.cuda.amp.autocast(enabled=True):
                 output = net_model(img)
             feats = output[0]
             head_code = output[1]
 
             with torch.cuda.amp.autocast(enabled=True):
-                heat_map, logits = cam_model(head_code, cluster_model.clusters)
-                supcluster_output = supcluster_model(head_code, cluster_model.clusters, None, is_direct=False)
-                supcluster_heat_map, supcluster_logits  = supcluster_cam_model(head_code, supcluster_model.clusters)
+                cluster_loss, cluster_preds, clusters = cluster_model(head_code, 2)
+                heat_map, logits, supcluster_heat_map, supcluster_logits, att = cam_model(head_code, clusters)#cluster_model.clusters)
+                #supcluster_output = supcluster_model(head_code, cluster_model.clusters, None, is_direct=False)
+                #supcluster_heat_map, supcluster_logits  = supcluster_cam_model(head_code, supcluster_model.clusters)
                 #heat_map = F.sigmoid(heat_map)
             #print(head_code[0, 0], head_code[0, 0].size())
             #head_code = F.interpolate(head_code, label.shape[-2:], mode='bicubic', align_corners=False)
+            
             heat_map = F.interpolate(heat_map, label.shape[-2:], mode='bicubic', align_corners=False)
             supcluster_heat_map = F.interpolate(supcluster_heat_map, label.shape[-2:], mode='bicubic', align_corners=False)
             
+            head_code = F.interpolate(head_code, label.shape[-2:], mode='bilinear', align_corners=False)
             if is_crf:
                 with torch.cuda.amp.autocast(enabled=True):
                     linear_preds = torch.log_softmax(linear_model(head_code), dim=1)
@@ -213,17 +221,18 @@ def evaluate(net_model: nn.Module,
                 with torch.cuda.amp.autocast(enabled=True):
                     #print(head_code[0, 0], head_code[0, 0].size())
                     #raise SystemExit
-                    cluster_loss, cluster_preds = cluster_model(head_code, None, is_direct=opt["eval"]["is_direct"])
-                    supcluster_loss, supcluster_preds = supcluster_model(head_code, cluster_model.clusters, None, is_direct=False)
+                    #cluster_loss, cluster_preds = cluster_model(head_code, None, is_direct=opt["eval"]["is_direct"])
+                    cluster_loss, cluster_preds, _ = cluster_model(head_code, None, is_direct=opt["eval"]["is_direct"])
+                    #supcluster_loss, supcluster_preds = supcluster_model(head_code, cluster_model.clusters, None, is_direct=False)
                 
                 cluster_preds = F.interpolate(cluster_preds, label.shape[-2:], mode='bicubic', align_corners=False)
-                supcluster_preds = F.interpolate(supcluster_preds, label.shape[-2:], mode='bicubic', align_corners=False)
+                #supcluster_preds = F.interpolate(supcluster_preds, label.shape[-2:], mode='bicubic', align_corners=False)
 
                 cluster_conf = cluster_preds
-                supcluster_conf = supcluster_preds
+                #supcluster_conf = supcluster_preds
                 
                 cluster_preds = cluster_preds.argmax(1)
-                supcluster_preds = supcluster_preds.argmax(1)
+                #supcluster_preds = supcluster_preds.argmax(1)
 
 
             binary_label = torch.zeros_like(label)
@@ -232,8 +241,8 @@ def evaluate(net_model: nn.Module,
             binary_label = torch.max(torch.max(binary_label, -1)[0], -1)[0]
             linear_metrics.update(linear_preds, label)
             cluster_metrics.update(cluster_preds, label)
-            supcluster_metrics.update(supcluster_preds, label)
-            cam_metrics.update(F.softmax(logits), binary_label)
+            #supcluster_metrics.update(supcluster_preds, label)
+            cam_metrics.update(F.sigmoid(logits), binary_label)
             supcluster_cam_metrics.update(F.sigmoid(supcluster_logits), binary_label.long())
 
             eval_stats.append(cluster_loss)
@@ -261,10 +270,11 @@ def evaluate(net_model: nn.Module,
                     vis_data['linear_preds'] = linear_preds.cpu()[binary_label == 1]
                     vis_data['cluster_preds'] = cluster_preds.cpu()[binary_label == 1]
                     vis_data['cluster_conf'] = cluster_conf.cpu()[binary_label == 1]
-                    vis_data['supcluster_preds'] = supcluster_preds.cpu()[binary_label == 1]
-                    vis_data['supcluster_conf'] = supcluster_conf.cpu()[binary_label == 1]
+                    #vis_data['supcluster_preds'] = supcluster_preds.cpu()[binary_label == 1]
+                    #vis_data['supcluster_conf'] = supcluster_conf.cpu()[binary_label == 1]
                     vis_data['cam_preds'] = heat_map.cpu()[binary_label == 1]
                     vis_data['supcluster_cam_preds'] = supcluster_heat_map.cpu()[binary_label == 1]
+                    vis_data['att'] = att.cpu()[binary_label == 1]
 
                 else:
                     vis_data['img'] = torch.cat([vis_data['img'], vis_im], dim = 0)
@@ -273,16 +283,17 @@ def evaluate(net_model: nn.Module,
                     vis_data['linear_preds'] = torch.cat([vis_data['linear_preds'], linear_preds.cpu()[binary_label == 1]], dim = 0)
                     vis_data['cluster_preds'] = torch.cat([vis_data['cluster_preds'], cluster_preds.cpu()[binary_label == 1]], dim = 0)
                     vis_data['cluster_conf'] = torch.cat([vis_data['cluster_conf'], cluster_conf.cpu()[binary_label == 1]], dim = 0)
-                    vis_data['supcluster_preds'] = torch.cat([vis_data['supcluster_preds'], supcluster_preds.cpu()[binary_label == 1]], dim = 0)
-                    vis_data['supcluster_conf'] = torch.cat([vis_data['supcluster_conf'], supcluster_conf.cpu()[binary_label == 1]], dim = 0)
+                    #vis_data['supcluster_preds'] = torch.cat([vis_data['supcluster_preds'], supcluster_preds.cpu()[binary_label == 1]], dim = 0)
+                    #vis_data['supcluster_conf'] = torch.cat([vis_data['supcluster_conf'], supcluster_conf.cpu()[binary_label == 1]], dim = 0)
                     vis_data['cam_preds'] = torch.cat([vis_data['cam_preds'], heat_map.cpu()[binary_label == 1]], dim = 0)
                     vis_data['supcluster_cam_preds'] = torch.cat([vis_data['supcluster_cam_preds'], supcluster_heat_map.cpu()[binary_label == 1]], dim = 0)
+                    vis_data['att'] = torch.cat([vis_data['att'], att.cpu()[binary_label == 1]], dim = 0)
             print(vis_data['img'].size())
             #print(data.keys())
-            save_dir='vis_tune_code_graph3_debug5'
+            save_dir='vis_tune_code_graph_att_cls13'
             #break
 
-        eval_metrics = get_metrics(cluster_metrics, linear_metrics,cam_metrics, supcluster_metrics, supcluster_cam_metrics)
+        eval_metrics = get_metrics(cluster_metrics, linear_metrics,cam_metrics, m4 = None, m5 = supcluster_cam_metrics)
         visualization(save_dir = save_dir,dataset_type = 'voc_stuff',saved_data = vis_data,cluster_metrics = cluster_metrics,is_label = True)
         return eval_stats.avg, eval_metrics
 

@@ -7,7 +7,8 @@ from dataset.data import create_cityscapes_colormap, create_pascal_label_colorma
 from utils.seg_utils import unnorm
 from PIL import Image
 from utils.seg_utils import UnsupervisedMetrics
-import matplotlib.pyplot as plt 
+import matplotlib.pyplot as plt
+import  torch
 
 
 def prep_for_plot(img, rescale=True, resize=None):
@@ -63,28 +64,14 @@ def visualization(save_dir: str, dataset_type: str, saved_data: defaultdict, clu
         print(np.unique(saved_data["cluster_preds"][index]))
         '''
         plot_rawcluster = (label_cmap[saved_data["cluster_preds"][index]]).astype(np.uint8)
-        '''
-        for row in plot_rawcluster:
-            for c in row:
-                new_one = True
-                for o in out:
-                    if c[0] == o[0] and c[1] == o[1] and c[2] == o[2]:
-                        #print(c, end = " ")
-                        new_one = False
-                if new_one: out.append(list(c))
-                
-            #print()
-        print(out)
-        '''
         Image.fromarray(plot_rawcluster).save(join(join(save_dir, "raw_cluster", file_name + ".png")))
         
 
-        plot_rawsupcluster = (label_cmap[saved_data["supcluster_preds"][index]]).astype(np.uint8)
-        Image.fromarray(plot_rawsupcluster).save(join(join(save_dir, "raw_supcluster", file_name + ".png")))
+        #plot_rawsupcluster = (label_cmap[saved_data["supcluster_preds"][index]]).astype(np.uint8)
+        #Image.fromarray(plot_rawsupcluster).save(join(join(save_dir, "raw_supcluster", file_name + ".png")))
         
         img = saved_data['img'][index].cpu().numpy()
         Image.fromarray(img).save(join(join(save_dir, "rgb", file_name + ".png")))
-
 
         plot_cam = saved_data['cam_preds'][index].cpu().numpy()
         plt.imshow(plot_cam, cmap = 'jet')
@@ -99,16 +86,15 @@ def visualization(save_dir: str, dataset_type: str, saved_data: defaultdict, clu
         plt.savefig(join(join(save_dir, "supcluster_cam", file_name + ".png")))
         plt.clf()
 
-
-
         cluster_logits = saved_data['cluster_conf'][index]
-        supcluster_logits = saved_data['supcluster_conf'][index]
+        #supcluster_logits = saved_data['supcluster_conf'][index]
         cluster_logits = F.softmax(cluster_logits, dim = 0)
-        supcluster_logits = F.softmax(supcluster_logits, dim = 0)
+        #supcluster_logits = F.softmax(supcluster_logits, dim = 0)
         cluster_preds = saved_data['cluster_preds'][index]
-        supcluster_preds = saved_data['supcluster_preds'][index]
-        heatmap = saved_data['supcluster_cam_preds'][index]#F.sigmoid(saved_data['cam_preds'][index])
+        #supcluster_preds = saved_data['supcluster_preds'][index]
+        heatmap = saved_data['cam_preds'][index]#F.sigmoid(saved_data['cam_preds'][index])
         heatmap = heatmap.squeeze()
+        att = saved_data['att'][index]
 
 
         n_concepts = cluster_logits.shape[0]
@@ -122,11 +108,11 @@ def visualization(save_dir: str, dataset_type: str, saved_data: defaultdict, clu
             
 
             concept_mask = (cluster_preds == i_concept)
-            supconcept_mask = (supcluster_preds == i_concept)
+            #supconcept_mask = (supcluster_preds == i_concept)
 
-            if concept_mask.sum() < supconcept_mask.sum():
-                concept_mask = supconcept_mask
-                cluster_logits = supcluster_logits
+            #if concept_mask.sum() < supconcept_mask.sum():
+            #    concept_mask = supconcept_mask
+            #    cluster_logits = supcluster_logits
 
             if concept_mask.sum() < 1000:
                 continue
@@ -145,7 +131,20 @@ def visualization(save_dir: str, dataset_type: str, saved_data: defaultdict, clu
             plt.colorbar()
             plt.savefig(join(join(save_dir, "concepts", "%05d"%i_concept, file_name + ".png")))
             plt.clf()
+
             
+        #print(cluster_preds.size())
+        #concept_list = torch.unique(cluster_preds)
+        #print(att, att.size())
+        #raise SystemExit
+        
+        #plt.imshow(data.detach().cpu().numpy().copy(), interpolation='nearest')
+        #ax.set_xticklabels(['', 'sky', 'road', 'vehicle', 'car body', 'window', 'wheel', 'grass'])
+        #ax.set_yticklabels(['', 'sky', 'road', 'vehicle', 'car body', 'window', 'wheel', 'grass'])
+        #plt.show()
+        #plt.savefig(join(join(save_dir, "att", "%05d"%i_concept, file_name + ".png")))
+        #plt.close()
+
 
  
         

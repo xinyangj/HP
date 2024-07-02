@@ -21,6 +21,7 @@ from pytorch_lightning.utilities.seed import seed_everything
 from torchvision import datasets, transforms
 import numpy as np
 from torch.optim import Adam, AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from loss import SupConLoss
 from make_reference_pool import initialize_reference_pool, renew_reference_pool
 from torcheval.metrics import BinaryAUROC
@@ -74,6 +75,8 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
     project_head = nn.Linear(opt['model']['dim'], opt['model']['dim'])
     project_head.cuda()
     head_optimizer = Adam(project_head.parameters(), lr=opt["optimizer"]["net"]["lr"])
+    T_max = int(opt['train']['epoch'] * len(train_dataset) / opt['dataloader']['batch_size'])
+    head_scheduler = CosineAnnealingLR(head_optimizer, T_max)
 
     criterion = criterion.to(device)
     supcon_criterion = SupConLoss(temperature=opt["tau"]).to(device)
@@ -95,7 +98,14 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
             supcluster_params = supcluster_model.parameters(), 
             supcluster_cam_params = supcluster_cam_model.parameters(), 
             opt=opt["optimizer"],
-            model_type=opt["model"]["name"])
+            model_type=opt["model"]["name"], )
+        net_scheduler = CosineAnnealingLR(net_optimizer, T_max)
+        linear_probe_scheduler = CosineAnnealingLR(linear_probe_optimizer, T_max)
+        cluster_probe_scheduler = CosineAnnealingLR(cluster_probe_optimizer, T_max)
+        cam_scheduler = CosineAnnealingLR(cam_optimizer, T_max)
+        supcluster_scheduler = CosineAnnealingLR(supcluster_optimizer, T_max)
+        supcluster_cam_scheduler = CosineAnnealingLR(supcluster_cam_optimizer, T_max)
+        
     else:
         net_optimizer, linear_probe_optimizer, cluster_probe_optimizer, cam_optimizer, supcluster_optimizer, supcluster_cam_optimizer  = None, None, None, None, None, None
 
@@ -217,18 +227,19 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
             with torch.cuda.amp.autocast(enabled=True):
                 linear_output = linear_model(detached_code)
                 cluster_output = cluster_model(detached_code, None, is_direct=False)
-                cam_output = cam_model(code, cluster_model.clusters)
-                supcluster_output = supcluster_model(detached_code, cluster_model.clusters.detach(), None, is_direct=False)
-                supcluster_cam_output  = supcluster_cam_model(code, supcluster_model.clusters.detach())
+                #cluster_entropy = cluster_model.forward_entropy(code, None, is_direct=False)
+                cam_output = cam_model(code, cluster_output[2]) #cluster_model.clusters)
+                #supcluster_output = supcluster_model(detached_code, cluster_model.clusters.detach(), None, is_direct=False)
+                #supcluster_cam_output  = supcluster_cam_model(code, supcluster_model.clusters.detach())
 
                 loss, loss_dict, corr_dict = criterion(model_input=model_input,
                                                        model_output=model_output,
                                                        linear_output=linear_output,
                                                        cluster_output=cluster_output, 
                                                        cam_output = cam_output, 
-                                                       supcluster_output = supcluster_output, 
-                                                       supcluster_cam_output = supcluster_cam_output 
-
+                                                       #supcluster_output = supcluster_output, 
+                                                       #supcluster_cam_output = supcluster_cam_output 
+                                                       cluster_entropy = None #cluster_entropy
                                                        )
 
                 loss = loss + loss_supcon + loss_consistency*opt["alpha"]
@@ -253,10 +264,21 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
             scaler.step(cluster_probe_optimizer)
             scaler.step(cam_optimizer)
             scaler.step(head_optimizer)
-            scaler.step(supcluster_optimizer)
-            scaler.step(supcluster_cam_optimizer)
+            #scaler.step(supcluster_optimizer)
+            #scaler.step(supcluster_cam_optimizer)
+
 
             scaler.update()
+
+            net_scheduler.step()
+            linear_probe_scheduler.step()
+            cluster_probe_scheduler.step()
+            cam_scheduler.step()
+            head_scheduler.step()
+            #supcluster_scheduler.step()
+            #supcluster_cam_scheduler.step()
+
+            
 
             current_iter += 1
 
@@ -280,10 +302,11 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
                                 for k, v in corr_dict.items():
                                     s += f"  -- {k}(now): {v:.6f}\n"
                 s += f"time(data/fwd/bwd): {data_time:.3f}/{forward_time:.3f}/{backward_time:.3f}\n"
-                s += f"LR: {lrs}\n"
+                #s += f"LR: {lrs}\n"
                 s += f"batch_size x world_size x num_accum: " \
                      f"{batch_size} x {world_size} x {num_accum} = {batch_size * world_size * num_accum}\n"
-                s += f"norm(param/grad): {p_norm.item():.3f}/{g_norm.item():.3f}"
+                s += f"norm(param/grad): {p_norm.item():.3f}/{g_norm.item():.3f}\n"
+                s += f"learning rate: {cam_scheduler.get_last_lr()[0]}\n"
                 print(s)
 
             # --------------------------- Valid --------------------------------#
@@ -304,9 +327,9 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
                 #print(valid_metrics["Cluster_mIoU"], valid_metrics["CAM_AUC"], valid_metrics["SupCluster_mIoU"], valid_metrics["SUPCLUSTER_CAM_AUC"])
 
                 
-                if best_metric <= (valid_metrics["Cluster_mIoU"] / 100 + valid_metrics["CAM_AUC"] + valid_metrics["SupCluster_mIoU"] / 100 + valid_metrics["SUPCLUSTER_CAM_AUC"]):
+                if best_metric <= valid_metrics["CAM_AUC"]:
                 #if best_metric <= (valid_metrics["Cluster_mIoU"] + valid_metrics["Cluster_Accuracy"] + valid_metrics["Linear_mIoU"] + valid_metrics["Linear_Accuracy"]):
-                    best_metric = valid_metrics["Cluster_mIoU"] / 100 + valid_metrics["CAM_AUC"] + valid_metrics["SupCluster_mIoU"] / 100 + valid_metrics["SUPCLUSTER_CAM_AUC"]
+                    best_metric = valid_metrics["CAM_AUC"] #+ valid_metrics["SupCluster_mIoU"] / 100 + valid_metrics["SUPCLUSTER_CAM_AUC"]
                     best_epoch = current_epoch
                     best_iter = current_iter
                     s += f"[VAL] -------- updated ({metric})! {prev_best_metric:.6f} -> {best_metric:.6f}\n"
@@ -325,7 +348,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
                         s += f"[VAL] {metric_k} : {best_valid_metrics[metric_k]:.6f} -> {metric_v:.6f}\n"
                     best_valid_metrics.update(valid_metrics)
                 else:
-                    now_metric = valid_metrics["Cluster_mIoU"] / 100+ valid_metrics["CAM_AUC"] + valid_metrics["SupCluster_mIoU"] /100 + valid_metrics["SUPCLUSTER_CAM_AUC"]
+                    now_metric = valid_metrics["CAM_AUC"] # + valid_metrics["SupCluster_mIoU"] /100 + valid_metrics["SUPCLUSTER_CAM_AUC"]
                     s += f"[VAL] -------- not updated ({metric})." \
                          f" (now) {now_metric:.6f} vs (best) {prev_best_metric:.6f}\n"
                     s += f"[VAL] previous best was at {best_epoch} epoch, {best_iter} iters\n"
@@ -418,9 +441,10 @@ def evaluate(net_model: nn.Module,
             head_code = output[1]
             
             with torch.cuda.amp.autocast(enabled=True):
-                heat_map, logits = cam_model(head_code, cluster_model.clusters)
-                supcluster_output = supcluster_model(head_code, cluster_model.clusters, None, is_direct=False)
-                supcluster_heat_map, supcluster_logits  = supcluster_cam_model(head_code, supcluster_model.clusters)
+                cluster_loss, cluster_preds, clusters = cluster_model(head_code, 2)
+                heat_map, logits, supcluster_heat_map, supcluster_logits, _, _ = cam_model(head_code, clusters) #cluster_model.clusters)
+                #supcluster_output = supcluster_model(head_code, cluster_model.clusters, None, is_direct=False)
+                #supcluster_heat_map, supcluster_logits  = supcluster_cam_model(head_code, supcluster_model.clusters)
 
             head_code = F.interpolate(head_code, label.shape[-2:], mode='bilinear', align_corners=False)
 
@@ -429,7 +453,7 @@ def evaluate(net_model: nn.Module,
                     linear_preds = torch.log_softmax(linear_model(head_code), dim=1)
 
                 with torch.cuda.amp.autocast(enabled=True):
-                    cluster_loss, cluster_preds = cluster_model(head_code, 2, log_probs=True, is_direct=opt["eval"]["is_direct"])
+                    cluster_loss, cluster_preds= cluster_model(head_code, 2, log_probs=True, is_direct=opt["eval"]["is_direct"])
                 linear_preds = batched_crf(img, linear_preds).argmax(1).cuda()
                 cluster_preds = batched_crf(img, cluster_preds).argmax(1).cuda()
 
@@ -438,10 +462,10 @@ def evaluate(net_model: nn.Module,
                     linear_preds = linear_model(head_code).argmax(1)
 
                 with torch.cuda.amp.autocast(enabled=True):
-                    cluster_loss, cluster_preds = cluster_model(head_code, None, is_direct=opt["eval"]["is_direct"])
-                    supcluster_loss, supcluster_preds = supcluster_model(head_code, cluster_model.clusters, None, is_direct=False)
+                    cluster_loss, cluster_preds, _ = cluster_model(head_code, None, is_direct=opt["eval"]["is_direct"])
+                    #supcluster_loss, supcluster_preds = supcluster_model(head_code, cluster_model.clusters, None, is_direct=False)
                 cluster_preds = cluster_preds.argmax(1)
-                supcluster_preds = supcluster_preds.argmax(1)
+                #supcluster_preds = supcluster_preds.argmax(1)
 
             binary_label = torch.zeros_like(label)
             binary_label[label != 11] = 0
@@ -450,13 +474,13 @@ def evaluate(net_model: nn.Module,
             binary_label = (torch.sum(torch.sum(binary_label, -1), -1) > 100)
             linear_metrics.update(linear_preds, label)
             cluster_metrics.update(cluster_preds, label)
-            supcluster_metrics.update(supcluster_preds, label)
+            #supcluster_metrics.update(supcluster_preds, label)
             cam_metrics.update(F.sigmoid(logits), binary_label.long())
             supcluster_cam_metrics.update(F.sigmoid(supcluster_logits), binary_label.long())
 
             eval_stats.append(cluster_loss)
 
-        eval_metrics = get_metrics(cluster_metrics, linear_metrics, cam_metrics, supcluster_metrics, supcluster_cam_metrics)
+        eval_metrics = get_metrics(cluster_metrics, linear_metrics, cam_metrics, m4 = None, m5 = supcluster_cam_metrics) #, supcluster_metrics, supcluster_cam_metrics)
 
         return eval_stats.avg, eval_metrics
 

@@ -21,10 +21,23 @@ class VQAttCAMHead(nn.Module):
         #self.classifier = nn.Conv2d(dim, 2, (1, 1))
         #self.classifier2 = nn.Conv2d(256, 2, (1, 1))
         #self.out_feat = nn.Conv2d(n_classes, dim, (1, 1))
-        self.binary_classifier = nn.Conv2d(dim, 1, (1, 1))
-        self.att = nn.MultiheadAttention(dim, 1)
+        #self.binary_classifier = nn.Conv2d(dim, 1, (1, 1))
+
+        self.binary_classifier0 = nn.Conv2d(dim, 1, (1, 1))
+        self.binary_classifier1 = nn.Conv2d(dim, 1, (1, 1))
+        self.att = nn.MultiheadAttention(dim, 8, batch_first=True)
+        self.cross_att = nn.MultiheadAttention(dim, 8, batch_first=True)
+
+        #self.ffn = nn.Sequential(nn.Linear(dim, dim), nn.ReLU(), nn.Linear(dim, dim))
+        self.ffn0 = nn.Sequential(nn.Linear(dim, dim), nn.ReLU())
+        self.ffn1 = nn.Sequential(nn.Linear(dim, dim), nn.ReLU())
         #self.att = nn.MultiheadAttention(dim, 1, batch_first=True)
+
+        #self.norm = nn.LayerNorm(dim)
+        self.norm0 = nn.LayerNorm(dim)
+        self.norm1 = nn.LayerNorm(dim)
         self.temperature = temperature
+        self.cls_token = nn.Parameter(torch.randn(1,1, dim))
         
     def forward(self, x, centers):
         #x = F.relu(x)
@@ -41,31 +54,53 @@ class VQAttCAMHead(nn.Module):
         print(normed_clusters.size(), normed_features.size())
         
         z_q = self.att(normed_features, normed_clusters , normed_clusters)
-        
         '''
 
         normed_clusters = centers
         normed_features = x
 
+        heatmap0 = self.binary_classifier0(x)
+        logits0 = F.adaptive_avg_pool2d(heatmap0, 1).squeeze()
+
         inner_products = torch.einsum("bchw,nc->bnhw", normed_features, normed_clusters)
         one_hot = F.gumbel_softmax(inner_products, tau = self.temperature, hard = True, dim=1)
         z_q = torch.einsum('b n h w, n d -> b d h w', one_hot, centers)
-
-        z_q = z_q.permute((0, 2, 3, 1)).reshape(x.size(0), x.size(2) * x.size(3), -1)
-        z_q, a = self.att(z_q, z_q, z_q)
-        z_q = z_q.reshape(x.size(0), x.size(2), x.size(3), -1).permute(0, 3, 1, 2)    
-        
-        heatmap = self.binary_classifier(z_q)
-        #heatmap = F.sigmoid(heatmap / self.temperature)
+        heatmap = self.binary_classifier0(z_q)
         logits = F.adaptive_avg_pool2d(heatmap, 1).squeeze()
-        #logits = F.adaptive_max_pool2d(heatmap, 1).squeeze()
+        
+        z_q = z_q.permute((0, 2, 3, 1)).reshape(x.size(0), x.size(2) * x.size(3), -1)
+        '''
+        #z_q = torch.cat([cls_tokens, z_q], dim=1)
+        z_q_att, a = self.att(z_q, z_q, z_q)
+        z_q = z_q_att + z_q
+        z_q = self.norm(z_q)
+        z_q = self.ffn(z_q)
+        '''
+        
+        z_q_att, a = self.att(z_q, z_q, z_q)
+        z_q = z_q_att + z_q
+        z_q = self.norm0(z_q)
+        z_q = self.ffn0(z_q)
 
-        #print(one_hot_max[:].unsqueeze(1).sum())
-        #raise SystemExit
+        cls_tokens = self.cls_token.repeat(z_q.size(0), 1, 1)
+        z_q, a_cross = self.cross_att(cls_tokens, z_q, z_q)
+        #z_q = z_q + z_q_att
+        z_q = self.norm1(z_q)
+        z_q = self.ffn1(z_q)
 
+        cls_tokens = z_q[:, 0]
+        #print(cls_tokens.size())
+        supcluster_logits = self.binary_classifier1(cls_tokens.unsqueeze(-1).unsqueeze(-1))
+        supcluster_logits = supcluster_logits.squeeze()
+        supcluster_heatmap = a_cross[:, 0].reshape(x.size(0), x.size(2), x.size(3))
+        supcluster_heatmap = supcluster_heatmap.unsqueeze(1)
+        '''
+        z_q = z_q.reshape(x.size(0), x.size(2), x.size(3), -1).permute(0, 3, 1, 2)    
+        heatmap = self.binary_classifier(z_q)
+        logits = F.adaptive_avg_pool2d(heatmap, 1).squeeze()
+        '''
 
-        return heatmap, logits #one_hot[:, 93].unsqueeze(1).float(), logits #heatmap, logits
-
+        return heatmap, logits, supcluster_heatmap, supcluster_logits, a, logits0 #one_hot[:, 93].unsqueeze(1).float(), logits #heatmap, logits
 
 
 class ClusterOnGNN(nn.Module):
@@ -253,7 +288,7 @@ class STEGOmodel(nn.Module):
         self.cluster_probe3 = ClusterLookup(dim, n_classes + opt["extra_clusters"])
         self.linear_probe3 = nn.Conv2d(dim, n_classes, (1, 1))
 
-        self.cam = VQCAMHead(dim, n_classes + opt["extra_clusters"])
+        self.cam = VQAttCAMHead(dim, n_classes + opt["extra_clusters"])
         self.sup_cluster = ClusterOnGNN(dim, n_classes + opt["extra_clusters"])
         self.supcluster_cam = VQCAMHead(dim, n_classes + opt["extra_clusters"])
         
