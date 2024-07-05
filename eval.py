@@ -192,7 +192,7 @@ def evaluate(net_model: nn.Module,
 
             with torch.cuda.amp.autocast(enabled=True):
                 cluster_loss, cluster_preds, clusters = cluster_model(head_code, 2)
-                heat_map, logits, supcluster_heat_map, supcluster_logits, att = cam_model(head_code, clusters)#cluster_model.clusters)
+                heat_map, logits, supcluster_heat_map, supcluster_logits, att, _= cam_model(head_code, clusters)#cluster_model.clusters)
                 #supcluster_output = supcluster_model(head_code, cluster_model.clusters, None, is_direct=False)
                 #supcluster_heat_map, supcluster_logits  = supcluster_cam_model(head_code, supcluster_model.clusters)
                 #heat_map = F.sigmoid(heat_map)
@@ -290,7 +290,7 @@ def evaluate(net_model: nn.Module,
                     vis_data['att'] = torch.cat([vis_data['att'], att.cpu()[binary_label == 1]], dim = 0)
             print(vis_data['img'].size())
             #print(data.keys())
-            save_dir='vis_tune_code_graph_att_cls13'
+            save_dir='vis_tune_code_graph_att_cls15'
             #break
 
         eval_metrics = get_metrics(cluster_metrics, linear_metrics,cam_metrics, m4 = None, m5 = supcluster_cam_metrics)

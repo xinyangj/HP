@@ -81,7 +81,7 @@ def visualization(save_dir: str, dataset_type: str, saved_data: defaultdict, clu
         plt.clf()
 
         plot_cam = saved_data['supcluster_cam_preds'][index].cpu().numpy()
-        plt.imshow(plot_cam, cmap = 'jet')
+        plt.imshow(plot_cam, cmap = 'jet')#,  vmin = 0.0, vmax = 0.015)
         plt.colorbar()
         plt.savefig(join(join(save_dir, "supcluster_cam", file_name + ".png")))
         plt.clf()

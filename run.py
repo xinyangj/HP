@@ -228,7 +228,7 @@ def run(opt: dict, is_test: bool = False, is_debug: bool = False):
                 linear_output = linear_model(detached_code)
                 cluster_output = cluster_model(detached_code, None, is_direct=False)
                 #cluster_entropy = cluster_model.forward_entropy(code, None, is_direct=False)
-                cam_output = cam_model(code, cluster_output[2]) #cluster_model.clusters)
+                cam_output = cam_model(detached_code, cluster_output[2]) #cluster_model.clusters)
                 #supcluster_output = supcluster_model(detached_code, cluster_model.clusters.detach(), None, is_direct=False)
                 #supcluster_cam_output  = supcluster_cam_model(code, supcluster_model.clusters.detach())
 

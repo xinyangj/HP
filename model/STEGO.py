@@ -10,7 +10,59 @@ from utils.dist_utils import all_reduce_tensor, all_gather_tensor
 from model.graph_constructor import GraphConstructor
 from torch_geometric.nn.conv import MixHopConv, GCNConv
 from matplotlib import pyplot as plt
+import torch
+import torch.nn as nn
 
+class CustomMultiheadAttention(nn.MultiheadAttention):
+    def __init__(self, embed_dim, num_heads, dropout=0.0, bias=True, add_bias_kv=False, add_zero_attn=False, kdim=None, vdim=None, batch_first=True):
+        super().__init__(embed_dim, num_heads, dropout, bias, add_bias_kv, add_zero_attn, kdim, vdim, batch_first=batch_first)
+        self.batch_first = batch_first
+
+    def kq_score(self, query, key):
+        if self.batch_first:
+            batch_size, seq_length_q, embed_dim = query.size()
+            batch_size_k, seq_length_k, embed_dim_k = key.size()
+            assert batch_size == batch_size_k, "Batch sizes of query and key must match"
+        else:
+            seq_length_q, batch_size, embed_dim = query.size()
+            seq_length_k, batch_size_k, embed_dim_k = key.size()
+            assert batch_size == batch_size_k, "Batch sizes of query and key must match"
+        
+        # Step 1: Linear projections
+        q_proj_weight = self.in_proj_weight[:self.embed_dim, :]
+        k_proj_weight = self.in_proj_weight[self.embed_dim:2*self.embed_dim, :]
+        
+        if self.in_proj_bias is not None:
+            q_proj_bias = self.in_proj_bias[:self.embed_dim]
+            k_proj_bias = self.in_proj_bias[self.embed_dim:2*self.embed_dim]
+        else:
+            q_proj_bias = k_proj_bias = None
+        
+        Q = nn.functional.linear(query, q_proj_weight, q_proj_bias)
+        K = nn.functional.linear(key, k_proj_weight, k_proj_bias)
+        
+        # Step 2: Reshape Q, K
+        if self.batch_first:
+            Q = Q.contiguous().view(batch_size, seq_length_q, self.num_heads, self.head_dim).transpose(1, 2)
+            K = K.contiguous().view(batch_size, seq_length_k, self.num_heads, self.head_dim).transpose(1, 2)
+        else:
+            Q = Q.contiguous().view(seq_length_q, batch_size * self.num_heads, self.head_dim).transpose(0, 1)
+            K = K.contiguous().view(seq_length_k, batch_size * self.num_heads, self.head_dim).transpose(0, 1)
+        
+        # Step 3: Compute raw attention scores
+        raw_attention_scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim ** 0.5)
+        
+        
+        # Step 4: Normalize scores for each head separately
+        raw_attention_scores = raw_attention_scores.view(batch_size, self.num_heads, seq_length_q, seq_length_k)
+        min_scores = raw_attention_scores.min(dim=-1, keepdim=True)[0]
+        max_scores = raw_attention_scores.max(dim=-1, keepdim=True)[0]
+        normalized_attention_scores = (raw_attention_scores - min_scores) / (max_scores - min_scores + 1e-6)  # Add epsilon to avoid division by zero
+        
+        # Step 5: Average over heads
+        mean_attention_scores = normalized_attention_scores.mean(dim=1)
+        
+        return mean_attention_scores
 
 class VQAttCAMHead(nn.Module):
     def __init__(self, dim, n_classes, temperature = 10):
@@ -25,8 +77,8 @@ class VQAttCAMHead(nn.Module):
 
         self.binary_classifier0 = nn.Conv2d(dim, 1, (1, 1))
         self.binary_classifier1 = nn.Conv2d(dim, 1, (1, 1))
-        self.att = nn.MultiheadAttention(dim, 8, batch_first=True)
-        self.cross_att = nn.MultiheadAttention(dim, 8, batch_first=True)
+        self.att = CustomMultiheadAttention(dim, 8, batch_first=True)
+        self.cross_att = CustomMultiheadAttention(dim, 8, batch_first=True)
 
         #self.ffn = nn.Sequential(nn.Linear(dim, dim), nn.ReLU(), nn.Linear(dim, dim))
         self.ffn0 = nn.Sequential(nn.Linear(dim, dim), nn.ReLU())
@@ -38,7 +90,7 @@ class VQAttCAMHead(nn.Module):
         self.norm1 = nn.LayerNorm(dim)
         self.temperature = temperature
         self.cls_token = nn.Parameter(torch.randn(1,1, dim))
-        
+    
     def forward(self, x, centers):
         #x = F.relu(x)
         #x = self.latent(x)
@@ -69,6 +121,7 @@ class VQAttCAMHead(nn.Module):
         logits = F.adaptive_avg_pool2d(heatmap, 1).squeeze()
         
         z_q = z_q.permute((0, 2, 3, 1)).reshape(x.size(0), x.size(2) * x.size(3), -1)
+
         '''
         #z_q = torch.cat([cls_tokens, z_q], dim=1)
         z_q_att, a = self.att(z_q, z_q, z_q)
@@ -83,17 +136,25 @@ class VQAttCAMHead(nn.Module):
         z_q = self.ffn0(z_q)
 
         cls_tokens = self.cls_token.repeat(z_q.size(0), 1, 1)
-        z_q, a_cross = self.cross_att(cls_tokens, z_q, z_q)
+        z_q_out, a_cross = self.cross_att(cls_tokens, z_q, z_q)
+        supcluster_heatmap = self.cross_att.kq_score(cls_tokens, z_q)
+        supcluster_heatmap = supcluster_heatmap.squeeze().reshape(x.size(0), x.size(2), x.size(3))
+        supcluster_heatmap = supcluster_heatmap.unsqueeze(1)
+        
         #z_q = z_q + z_q_att
-        z_q = self.norm1(z_q)
+        z_q = self.norm1(z_q_out)
         z_q = self.ffn1(z_q)
 
         cls_tokens = z_q[:, 0]
         #print(cls_tokens.size())
         supcluster_logits = self.binary_classifier1(cls_tokens.unsqueeze(-1).unsqueeze(-1))
         supcluster_logits = supcluster_logits.squeeze()
-        supcluster_heatmap = a_cross[:, 0].reshape(x.size(0), x.size(2), x.size(3))
-        supcluster_heatmap = supcluster_heatmap.unsqueeze(1)
+        #supcluster_heatmap = a_cross[:, 0].reshape(x.size(0), x.size(2), x.size(3))
+        #supcluster_heatmap = supcluster_heatmap.unsqueeze(1)
+
+        cls_tokens = self.cls_token.repeat(z_q.size(0), 1, 1)
+        
+
         '''
         z_q = z_q.reshape(x.size(0), x.size(2), x.size(3), -1).permute(0, 3, 1, 2)    
         heatmap = self.binary_classifier(z_q)

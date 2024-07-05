@@ -5,7 +5,7 @@
     "wandb": {
         "project": "xinyangj001",
         "entity": "xinyangj",
-        "name": "hp_cam_vq_tune_code_att_cls15",
+        "name": "hp_cam_vq_tune_code_att_cls16",
         "mode": "online"
     },
     "dataset": {
@@ -103,7 +103,7 @@
     "train": {
         "print_freq": 10,
         "valid_freq": 100,
-        "epoch" : 3, 
+        "epoch" : 5, 
         "freeze_encoder_bn" : false,
         "freeze_all_bn" : -1,
         "num_accum" : 1,
